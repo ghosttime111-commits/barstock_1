@@ -1,0 +1,372 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Lock, Search } from "lucide-react";
+import { AppShell } from "@/components/AppShell";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { closeInventoryFn, getInventoryFn, upsertItemFn } from "@/lib/barstock.functions";
+import { parseQuantityExpression } from "@/lib/quantityExpression";
+import { useSession } from "@/lib/session";
+
+export const Route = createFileRoute("/inventories/$id")({
+  head: () => ({ meta: [{ title: "Переучёт — BarStock" }] }),
+  component: () => (
+    <AppShell allow={["bartender"]}>
+      <InventoryDetail />
+    </AppShell>
+  ),
+});
+
+function InventoryDetail() {
+  const { id } = Route.useParams();
+  const { session } = useSession();
+  const sessionToken = session?.session_token ?? null;
+  const qc = useQueryClient();
+  const getInv = useServerFn(getInventoryFn);
+  const upsert = useServerFn(upsertItemFn);
+  const close = useServerFn(closeInventoryFn);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["inventory", id],
+    queryFn: () => getInv({ data: { id, session_token: sessionToken! } }),
+    enabled: !!sessionToken,
+  });
+
+  const closeMut = useMutation({
+    mutationFn: () => close({ data: { id, session_token: sessionToken! } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["inventory", id] }),
+  });
+
+  const [query, setQuery] = useState("");
+  const [categoryId, setCategoryId] = useState<string | "all">("all");
+  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
+
+  const itemsMap = useMemo(() => {
+    const m = new Map<string, number>();
+    data?.items.forEach((it) => m.set(it.product_id, Number(it.quantity)));
+    return m;
+  }, [data]);
+
+  const filtered = useMemo(() => {
+    const prods = data?.products ?? [];
+    const q = query.trim().toLowerCase();
+    return prods.filter((p) => {
+      if (categoryId !== "all" && p.category_id !== categoryId) return false;
+      if (q && !p.name.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [data, query, categoryId]);
+
+  const categoryGroups = useMemo(() => {
+    const categoryById = new Map((data?.categories ?? []).map((c) => [c.id, c.name]));
+    type Product = (typeof filtered)[number];
+    type CategoryGroup = {
+      id: string;
+      name: string;
+      products: Product[];
+      filled: number;
+    };
+    const groups = new Map<string, CategoryGroup>();
+
+    filtered.forEach((product) => {
+      const id = product.category_id ?? "uncategorized";
+      const group: CategoryGroup = groups.get(id) ?? {
+        id,
+        name: categoryById.get(id) ?? "Без категории",
+        products: [],
+        filled: 0,
+      };
+      group.products.push(product);
+      if (itemsMap.has(product.id)) group.filled += 1;
+      groups.set(id, group);
+    });
+
+    return Array.from(groups.values()).sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  }, [data, filtered, itemsMap]);
+
+  const expandedKey = `barstock.inventory.${id}.expandedCategories`;
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(expandedKey);
+      if (raw) setExpandedCategories(JSON.parse(raw) as Record<string, boolean>);
+    } catch {
+      setExpandedCategories({});
+    }
+  }, [expandedKey]);
+
+  function toggleCategory(id: string) {
+    setExpandedCategories((prev) => {
+      const next = { ...prev, [id]: !(prev[id] ?? true) };
+      window.localStorage.setItem(expandedKey, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  if (isLoading) {
+    return <p className="text-sm text-muted-foreground">Загрузка…</p>;
+  }
+  if (error || !data) {
+    return (
+      <p className="text-sm text-destructive">
+        {error instanceof Error ? error.message : "Не удалось загрузить переучёт"}
+      </p>
+    );
+  }
+
+  const { inventory, categories, products } = data;
+  const isClosed = inventory.status !== "draft";
+  const counted = itemsMap.size;
+  const missingCount = Math.max(products.length - counted, 0);
+
+  function closeWithMissingCheck() {
+    if (
+      missingCount > 0 &&
+      !window.confirm(
+        `Не заполнено ${missingCount} товаров. Вы действительно хотите завершить переучёт?`,
+      )
+    ) {
+      return;
+    }
+    closeMut.mutate();
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <Link
+            to="/inventories"
+            className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="size-4" /> К списку
+          </Link>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Переучёт от{" "}
+            {new Date(inventory.created_at).toLocaleString("ru-RU", {
+              dateStyle: "medium",
+              timeStyle: "short",
+            })}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Посчитано: {counted} из {products.length} позиций
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Badge variant={isClosed ? "secondary" : "default"}>
+            {isClosed ? "Закрыт" : "Открыт"}
+          </Badge>
+          {!isClosed && (
+            <Button onClick={closeWithMissingCheck} disabled={closeMut.isPending}>
+              <Lock className="size-4" /> Закрыть
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Поиск товара…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <CategoryPill active={categoryId === "all"} onClick={() => setCategoryId("all")}>
+            Все
+          </CategoryPill>
+          {categories.map((c) => (
+            <CategoryPill
+              key={c.id}
+              active={categoryId === c.id}
+              onClick={() => setCategoryId(c.id)}
+            >
+              {c.name}
+            </CategoryPill>
+          ))}
+        </div>
+      </div>
+
+      {products.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border p-10 text-center text-muted-foreground">
+          В базе нет товаров. Добавьте их в таблицу <code>products</code>.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {categoryGroups.map((group) => (
+            <section
+              key={group.id}
+              className="overflow-hidden rounded-xl border border-border bg-card"
+            >
+              <button
+                type="button"
+                onClick={() => toggleCategory(group.id)}
+                className="flex w-full items-center justify-between gap-3 border-b border-border px-4 py-3 text-left transition hover:bg-muted/40"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  {(expandedCategories[group.id] ?? true) ? (
+                    <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="truncate font-medium">{group.name}</span>
+                </span>
+                <Badge
+                  variant={group.filled === group.products.length ? "secondary" : "outline"}
+                  className="shrink-0"
+                >
+                  {group.filled}/{group.products.length}
+                </Badge>
+              </button>
+              {(expandedCategories[group.id] ?? true) && (
+                <ul className="divide-y divide-border">
+                  {group.products.map((p) => (
+                    <ItemRow
+                      key={p.id}
+                      product={p}
+                      initial={itemsMap.get(p.id)}
+                      disabled={isClosed}
+                      onSave={async (qty) => {
+                        await upsert({
+                          data: {
+                            inventory_id: id,
+                            product_id: p.id,
+                            quantity: qty,
+                            session_token: sessionToken!,
+                          },
+                        });
+                        qc.invalidateQueries({ queryKey: ["inventory", id] });
+                      }}
+                    />
+                  ))}
+                </ul>
+              )}
+            </section>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CategoryPill({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "rounded-full border px-3 py-1 text-xs transition " +
+        (active
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-border bg-card text-muted-foreground hover:text-foreground")
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+function ItemRow({
+  product,
+  initial,
+  disabled,
+  onSave,
+}: {
+  product: { id: string; name: string; unit: string | null; category_id: string | null };
+  initial: number | undefined;
+  disabled: boolean;
+  onSave: (qty: number) => Promise<void>;
+}) {
+  const [value, setValue] = useState<string>(initial !== undefined ? String(initial) : "");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<boolean>(initial !== undefined);
+
+  useEffect(() => {
+    setValue(initial !== undefined ? String(initial) : "");
+    setSaved(initial !== undefined);
+    setError(null);
+  }, [initial]);
+
+  const preview = useMemo(() => {
+    if (!value.includes("+")) return null;
+    try {
+      return parseQuantityExpression(value);
+    } catch {
+      return null;
+    }
+  }, [value]);
+
+  async function commit() {
+    let num: number;
+    try {
+      num = parseQuantityExpression(value);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Некорректное выражение");
+      return;
+    }
+
+    if (initial !== undefined && num === initial) {
+      setValue(String(num));
+      setError(null);
+      setSaved(true);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(num);
+      setValue(String(num));
+      setError(null);
+      setSaved(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <li className="flex items-center justify-between gap-4 px-4 py-3">
+      <div className="min-w-0">
+        <div className="truncate font-medium">{product.name}</div>
+        <div className="text-xs text-muted-foreground">{product.unit ?? "шт"}</div>
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="min-h-[3rem] text-right">
+          {preview !== null && !error && (
+            <div className="mb-1 text-xs text-muted-foreground">= {preview}</div>
+          )}
+          {error && <div className="mb-1 max-w-32 text-xs text-destructive">{error}</div>}
+        </div>
+        {saved && !saving && !error && <CheckCircle2 className="size-4 text-primary" />}
+        <Input
+          inputMode="decimal"
+          className="w-28 text-right"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setError(null);
+            setSaved(false);
+          }}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+        />
+      </div>
+    </li>
+  );
+}

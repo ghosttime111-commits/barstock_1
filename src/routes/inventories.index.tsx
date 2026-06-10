@@ -1,0 +1,133 @@
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, ClipboardList, Loader2 } from "lucide-react";
+import { AppShell } from "@/components/AppShell";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { createInventoryFn, listInventoriesFn } from "@/lib/barstock.functions";
+import { useSession } from "@/lib/session";
+
+export const Route = createFileRoute("/inventories/")({
+  head: () => ({
+    meta: [{ title: "Переучёты — BarStock" }],
+  }),
+  component: () => (
+    <AppShell allow={["bartender"]}>
+      <InventoriesPage />
+    </AppShell>
+  ),
+});
+
+function InventoriesPage() {
+  const { session } = useSession();
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const list = useServerFn(listInventoriesFn);
+  const create = useServerFn(createInventoryFn);
+  const restaurantId = session?.user.restaurant_id ?? null;
+  const sessionToken = session?.session_token ?? null;
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["inventories", restaurantId],
+    queryFn: () => list({ data: { restaurant_id: restaurantId!, session_token: sessionToken! } }),
+    enabled: !!restaurantId && !!sessionToken,
+  });
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      create({
+        data: { restaurant_id: restaurantId!, session_token: sessionToken! },
+      }),
+    onSuccess: (inv) => {
+      qc.invalidateQueries({ queryKey: ["inventories"] });
+      navigate({ to: "/inventories/$id", params: { id: inv.id } });
+    },
+  });
+
+  if (!restaurantId) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-6 text-muted-foreground">
+        У вашего пользователя не указан ресторан. Привяжите пользователя к ресторану в БД.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Переучёты</h1>
+          <p className="text-sm text-muted-foreground">Все сессии переучёта вашего бара.</p>
+        </div>
+        <Button onClick={() => createMut.mutate()} disabled={createMut.isPending}>
+          {createMut.isPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Plus className="size-4" />
+          )}
+          Новый переучёт
+        </Button>
+      </div>
+
+      {createMut.error && (
+        <p className="text-sm text-destructive">
+          Ошибка:{" "}
+          {createMut.error instanceof Error ? createMut.error.message : String(createMut.error)}
+        </p>
+      )}
+
+      {isLoading && <p className="text-sm text-muted-foreground">Загрузка…</p>}
+      {error && (
+        <p className="text-sm text-destructive">
+          {error instanceof Error ? error.message : "Ошибка загрузки"}
+        </p>
+      )}
+
+      {data && data.length === 0 && (
+        <div className="rounded-xl border border-dashed border-border p-10 text-center text-muted-foreground">
+          <ClipboardList className="mx-auto mb-3 size-8 opacity-60" />
+          Переучётов пока нет. Создайте первый.
+        </div>
+      )}
+
+      <ul className="grid gap-3">
+        {data?.map((inv) => (
+          <li key={inv.id}>
+            <Link
+              to="/inventories/$id"
+              params={{ id: inv.id }}
+              className="flex items-center justify-between rounded-xl border border-border bg-card p-4 transition hover:border-primary/60 hover:bg-card/80"
+            >
+              <div>
+                <div className="font-medium">
+                  {new Date(inv.created_at).toLocaleString("ru-RU", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {inv.created_by_name ?? "—"} · позиций: {inv.items_count}
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <Badge variant={inv.status === "draft" ? "default" : "secondary"}>
+                  {inv.status === "draft"
+                    ? "Открыт"
+                    : inv.status === "completed"
+                      ? "Закрыт"
+                      : inv.status === "correction_required"
+                        ? "Коррекция"
+                        : inv.status}
+                </Badge>
+                <span className="text-xs text-primary underline-offset-2 hover:underline">
+                  Открыть →
+                </span>
+              </div>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}

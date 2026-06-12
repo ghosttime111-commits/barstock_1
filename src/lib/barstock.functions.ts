@@ -6,6 +6,8 @@ const idSchema = z.object({ id: z.string().uuid() });
 const sessionSchema = z.object({ session_token: z.string().min(32).max(2048) });
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const PASSWORD_ITERATIONS = 210_000;
+const productUnitSchema = z.enum(["л", "кг", "шт", "бут"]);
+const productStatusSchema = z.enum(["approved", "pending", "archived"]);
 
 type AuthUser = {
   id: string;
@@ -311,6 +313,176 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
     return user;
   });
 
+export const listCategoriesFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: rows, error } = await getBarstock()
+      .from("categories")
+      .select("id,name")
+      .order("name");
+    if (error) throw new Error(error.message);
+    return rows ?? [];
+  });
+
+export const createCategoryFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema.extend({ name: z.string().trim().min(1).max(160) }).parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: category, error } = await getBarstock()
+      .from("categories")
+      .insert({ name: data.name })
+      .select("id,name")
+      .single();
+    if (error) throw new Error(error.message);
+    return category;
+  });
+
+export const updateCategoryFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({ id: z.string().uuid(), name: z.string().trim().min(1).max(160) })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: category, error } = await getBarstock()
+      .from("categories")
+      .update({ name: data.name })
+      .eq("id", data.id)
+      .select("id,name")
+      .single();
+    if (error) throw new Error(error.message);
+    return category;
+  });
+
+export const deleteCategoryFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { count, error: countError } = await sb
+      .from("products")
+      .select("id", { count: "exact", head: true })
+      .eq("category_id", data.id);
+    if (countError) throw new Error(countError.message);
+    if ((count ?? 0) > 0) {
+      throw new Error("Нельзя удалить категорию, если к ней привязаны товары");
+    }
+
+    const { error } = await sb.from("categories").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const listProductsFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: rows, error } = await getBarstock()
+      .from("products")
+      .select("id,name,category_id,unit,status")
+      .order("name");
+    if (error) throw new Error(error.message);
+    return rows ?? [];
+  });
+
+export const createProductFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        name: z.string().trim().min(1).max(200),
+        category_id: z.string().uuid(),
+        unit: productUnitSchema,
+        status: productStatusSchema.default("approved"),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: product, error } = await getBarstock()
+      .from("products")
+      .insert({
+        name: data.name,
+        category_id: data.category_id,
+        unit: data.unit,
+        status: data.status,
+      })
+      .select("id,name,category_id,unit,status")
+      .single();
+    if (error) throw new Error(error.message);
+    return product;
+  });
+
+export const updateProductFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1).max(200),
+        category_id: z.string().uuid(),
+        unit: productUnitSchema,
+        status: productStatusSchema,
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: product, error } = await getBarstock()
+      .from("products")
+      .update({
+        name: data.name,
+        category_id: data.category_id,
+        unit: data.unit,
+        status: data.status,
+      })
+      .eq("id", data.id)
+      .select("id,name,category_id,unit,status")
+      .single();
+    if (error) throw new Error(error.message);
+    return product;
+  });
+
+export const archiveProductFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: product, error } = await getBarstock()
+      .from("products")
+      .update({ status: "archived" })
+      .eq("id", data.id)
+      .select("id,name,category_id,unit,status")
+      .single();
+    if (error) throw new Error(error.message);
+    return product;
+  });
+
 export const listInventoriesFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
     sessionSchema.extend({ restaurant_id: z.string().uuid() }).parse(input),
@@ -376,7 +548,11 @@ export const getInventoryFn = createServerFn({ method: "POST" })
           .eq("id", data.id)
           .maybeSingle(),
         sb.from("categories").select("id,name").order("name"),
-        sb.from("products").select("id,name,unit,category_id,status").order("name"),
+        sb
+          .from("products")
+          .select("id,name,unit,category_id,status")
+          .eq("status", "approved")
+          .order("name"),
         sb
           .from("inventory_items")
           .select("inventory_id,product_id,quantity")

@@ -292,44 +292,63 @@ function ItemRow({
   onSave: (qty: number) => Promise<void>;
 }) {
   const [value, setValue] = useState<string>(initial !== undefined ? String(initial) : "");
+  const [mode, setMode] = useState<"fact" | "add">("fact");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<boolean>(initial !== undefined);
+  const [displayQuantity, setDisplayQuantity] = useState(initial ?? 0);
+  const currentQuantity = displayQuantity;
 
   useEffect(() => {
-    setValue(initial !== undefined ? String(initial) : "");
+    setDisplayQuantity(initial ?? 0);
+    setValue(mode === "fact" && initial !== undefined ? String(initial) : "");
     setSaved(initial !== undefined);
     setError(null);
-  }, [initial]);
+  }, [initial, mode]);
 
   const preview = useMemo(() => {
-    if (!value.includes("+")) return null;
+    if (!value.trim()) return null;
     try {
-      return parseQuantityExpression(value);
+      const parsed = parseQuantityExpression(value);
+      if (mode === "add") return currentQuantity + parsed;
+      return value.includes("+") ? parsed : null;
     } catch {
       return null;
     }
-  }, [value]);
+  }, [currentQuantity, mode, value]);
+
+  function changeMode(nextMode: "fact" | "add") {
+    setMode(nextMode);
+    setError(null);
+    setSaved(initial !== undefined);
+    setValue(nextMode === "fact" && initial !== undefined ? String(initial) : "");
+  }
 
   async function commit() {
-    let num: number;
+    if (disabled || saving) return;
+
+    let entered: number;
     try {
-      num = parseQuantityExpression(value);
+      entered = parseQuantityExpression(value);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Некорректное выражение");
       return;
     }
 
-    if (initial !== undefined && num === initial) {
-      setValue(String(num));
+    const nextQuantity = mode === "add" ? currentQuantity + entered : entered;
+    const normalizedQuantity = Math.round(nextQuantity * 1_000_000_000_000) / 1_000_000_000_000;
+
+    if (initial !== undefined && normalizedQuantity === initial) {
+      setValue(mode === "add" ? "" : String(normalizedQuantity));
       setError(null);
       setSaved(true);
       return;
     }
     setSaving(true);
     try {
-      await onSave(num);
-      setValue(String(num));
+      await onSave(normalizedQuantity);
+      setDisplayQuantity(normalizedQuantity);
+      setValue(mode === "add" ? "" : String(normalizedQuantity));
       setError(null);
       setSaved(true);
     } finally {
@@ -338,34 +357,68 @@ function ItemRow({
   }
 
   return (
-    <li className="flex items-center justify-between gap-4 px-4 py-3">
+    <li className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="min-w-0">
         <div className="truncate font-medium">{product.name}</div>
         <div className="text-xs text-muted-foreground">{product.unit ?? "шт"}</div>
-      </div>
-      <div className="flex items-center gap-2">
-        <div className="min-h-[3rem] text-right">
-          {preview !== null && !error && (
-            <div className="mb-1 text-xs text-muted-foreground">= {preview}</div>
-          )}
-          {error && <div className="mb-1 max-w-32 text-xs text-destructive">{error}</div>}
+        <div className="mt-1 text-xs text-muted-foreground">
+          Итог: <span className="font-medium text-foreground">{currentQuantity}</span>
         </div>
-        {saved && !saving && !error && <CheckCircle2 className="size-4 text-primary" />}
-        <Input
-          inputMode="decimal"
-          className="w-28 text-right"
-          value={value}
-          disabled={disabled}
-          onChange={(e) => {
-            setValue(e.target.value);
-            setError(null);
-            setSaved(false);
-          }}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          }}
-        />
+      </div>
+      <div className="flex flex-col gap-2 sm:items-end">
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/30 p-1">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => changeMode("fact")}
+            className={
+              "min-h-10 rounded-md px-3 text-sm font-medium transition " +
+              (mode === "fact"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-background hover:text-foreground")
+            }
+          >
+            Факт
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => changeMode("add")}
+            className={
+              "min-h-10 rounded-md px-3 text-sm font-medium transition " +
+              (mode === "add"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-background hover:text-foreground")
+            }
+          >
+            + Добавить
+          </button>
+        </div>
+        <div className="flex items-start gap-2">
+          <div className="min-h-[3rem] text-right">
+            {preview !== null && !error && (
+              <div className="mb-1 text-xs text-muted-foreground">Итого: {preview}</div>
+            )}
+            {error && <div className="mb-1 max-w-32 text-xs text-destructive">{error}</div>}
+          </div>
+          {saved && !saving && !error && <CheckCircle2 className="mt-3 size-4 text-primary" />}
+          <Input
+            inputMode="decimal"
+            className="h-11 w-full min-w-32 text-right text-base sm:w-32"
+            value={value}
+            disabled={disabled}
+            placeholder={mode === "add" ? "0.5" : "0"}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setError(null);
+              setSaved(false);
+            }}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+          />
+        </div>
       </div>
     </li>
   );

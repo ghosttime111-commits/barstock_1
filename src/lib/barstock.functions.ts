@@ -783,9 +783,20 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
 
     const { error } = await sb
       .from("inventories")
-      .update({ status: "completed", correction_comment: null })
+      .update({ status: "completed" })
       .eq("id", data.id);
     if (error) throw new Error(error.message);
+
+    if (inv.status === "correction_required") {
+      const { error: commentError } = await sb
+        .from("inventories")
+        .update({ correction_comment: null })
+        .eq("id", data.id);
+      if (commentError && !commentError.message.includes("correction_comment")) {
+        throw new Error(commentError.message);
+      }
+    }
+
     return { ok: true };
   });
 

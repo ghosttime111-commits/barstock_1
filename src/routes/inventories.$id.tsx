@@ -166,6 +166,11 @@ function InventoryDetail() {
           )}
         </div>
       </div>
+      {closeMut.error && (
+        <p className="text-sm text-destructive">
+          {closeMut.error instanceof Error ? closeMut.error.message : "Не удалось закрыть переучёт"}
+        </p>
+      )}
 
       {inventory.status === "correction_required" && inventory.correction_comment && (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">

@@ -64,6 +64,19 @@ function formatDate(value: string) {
   });
 }
 
+function formatDateForFile(value: string) {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function safeFilePart(value: string) {
+  return (
+    value
+      .trim()
+      .replace(/[^\p{L}\p{N}]+/gu, "_")
+      .replace(/^_+|_+$/g, "") || "Archive"
+  );
+}
+
 function numberValue(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -71,6 +84,15 @@ function numberValue(value: number | null | undefined) {
 export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
   const categoryById = new Map(archive.categories.map((category) => [category.id, category.name]));
   const workbook = XLSX.utils.book_new();
+  const restaurants = Array.from(
+    new Set(
+      archive.inventories
+        .map((report) => report.restaurant?.name?.trim())
+        .filter((name): name is string => Boolean(name)),
+    ),
+  );
+  const archiveRestaurantName =
+    restaurants.length === 1 ? restaurants[0] : restaurants.length > 1 ? "Все рестораны" : "Архив";
 
   const summaryRows = [
     [
@@ -112,9 +134,11 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
   XLSX.utils.book_append_sheet(workbook, summarySheet, "Сводка");
 
   archive.inventories.forEach((report, index) => {
+    const restaurantName = report.restaurant?.name ?? "";
     const rows = [
-      ["Дата:", formatDate(report.inventory.created_at)],
-      ["Ресторан:", report.restaurant?.name ?? ""],
+      ["Ресторан:", restaurantName],
+      ["Дата переучёта:", formatDate(report.inventory.created_at)],
+      ["Статус:", report.inventory.status],
       [],
       ["Товар", "Категория", "Единица", "Факт", "Учёт", "Разница", "Статус"],
       ...report.rows.map((row) => [
@@ -141,10 +165,12 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
       workbook,
       sheet,
       safeSheetName(
-        `${index + 1} ${new Date(report.inventory.created_at).toLocaleDateString("ru-RU")}`,
+        `${index + 1} ${restaurantName} ${new Date(report.inventory.created_at).toLocaleDateString("ru-RU")}`,
       ),
     );
   });
 
-  XLSX.writeFile(workbook, `barstock-archive-${archive.month}.xlsx`);
+  const firstInventoryDate = archive.inventories[0]?.inventory.created_at;
+  const fileDate = firstInventoryDate ? formatDateForFile(firstInventoryDate) : archive.month;
+  XLSX.writeFile(workbook, `BarStock_${safeFilePart(archiveRestaurantName)}_${fileDate}.xlsx`);
 }

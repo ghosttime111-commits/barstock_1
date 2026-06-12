@@ -2,14 +2,27 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { ArrowLeft, Download, FileSpreadsheet, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, FileSpreadsheet, RotateCcw, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { deleteInventoryFn, getInventoryReportFn } from "@/lib/barstock.functions";
+import {
+  deleteInventoryFn,
+  getInventoryReportFn,
+  requestInventoryCorrectionFn,
+} from "@/lib/barstock.functions";
 import { exportInventoryToExcel } from "@/lib/exportInventoryToExcel";
 import { useSession } from "@/lib/session";
 import type { DiscrepancyStatus } from "@/lib/expectedStock";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 
 export const Route = createFileRoute("/reports/$id")({
   head: () => ({ meta: [{ title: "Отчёт по переучёту — BarStock" }] }),
@@ -30,18 +43,40 @@ function ReportPage() {
   const queryClient = useQueryClient();
   const getReport = useServerFn(getInventoryReportFn);
   const deleteInventory = useServerFn(deleteInventoryFn);
+  const requestCorrection = useServerFn(requestInventoryCorrectionFn);
   const { data, isLoading, error } = useQuery({
     queryKey: ["report", id],
     queryFn: () => getReport({ data: { id, session_token: sessionToken! } }),
     enabled: !!sessionToken,
   });
   const [filter, setFilter] = useState<Filter>("all");
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [correctionComment, setCorrectionComment] = useState("");
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteInventory({ data: { id, session_token: sessionToken! } }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["reports"] });
       await navigate({ to: "/reports" });
+    },
+  });
+
+  const correctionMutation = useMutation({
+    mutationFn: () =>
+      requestCorrection({
+        data: {
+          id,
+          session_token: sessionToken!,
+          correction_comment: correctionComment.trim(),
+        },
+      }),
+    onSuccess: async () => {
+      setCorrectionOpen(false);
+      setCorrectionComment("");
+      setCorrectionError(null);
+      await queryClient.invalidateQueries({ queryKey: ["report", id] });
+      await queryClient.invalidateQueries({ queryKey: ["reports"] });
     },
   });
 
@@ -76,6 +111,7 @@ function ReportPage() {
   }
 
   const { inventory } = data;
+  const isCorrectionRequired = inventory.status === "correction_required";
 
   function confirmAndDelete() {
     const confirmed = window.confirm(
@@ -83,6 +119,15 @@ function ReportPage() {
     );
     if (!confirmed) return;
     deleteMutation.mutate();
+  }
+
+  function submitCorrection() {
+    if (!correctionComment.trim()) {
+      setCorrectionError("Комментарий обязателен");
+      return;
+    }
+    setCorrectionError(null);
+    correctionMutation.mutate();
   }
 
   return (
@@ -105,6 +150,14 @@ function ReportPage() {
           Всего: {totals.total} · совпадает: {totals.match} · недостача: {totals.shortage} ·
           излишек: {totals.surplus}
         </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Badge variant={isCorrectionRequired ? "default" : "secondary"}>
+            {inventoryStatusLabel(inventory.status)}
+          </Badge>
+          {isCorrectionRequired && (
+            <span className="text-sm text-muted-foreground">Предварительный отчёт</span>
+          )}
+        </div>
         <Link
           to="/reports/expected/$id"
           params={{ id: inventory.id }}
@@ -117,6 +170,15 @@ function ReportPage() {
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="secondary" onClick={() => exportInventoryToExcel(data)}>
           <Download className="size-4" /> Скачать Excel
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={correctionMutation.isPending || isCorrectionRequired}
+          onClick={() => setCorrectionOpen(true)}
+        >
+          <RotateCcw className="size-4" />
+          Вернуть на доработку
         </Button>
         <Button
           type="button"
@@ -135,6 +197,54 @@ function ReportPage() {
             : "Не удалось удалить переучёт"}
         </p>
       )}
+      {correctionMutation.error && (
+        <p className="text-sm text-destructive">
+          {correctionMutation.error instanceof Error
+            ? correctionMutation.error.message
+            : "Не удалось вернуть переучёт на доработку"}
+        </p>
+      )}
+
+      <Dialog open={correctionOpen} onOpenChange={setCorrectionOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Вернуть переучёт на доработку</DialogTitle>
+            <DialogDescription>
+              Бармен увидит комментарий и сможет исправить фактические остатки.
+            </DialogDescription>
+          </DialogHeader>
+          <label className="grid gap-2 text-sm">
+            <span className="font-medium">Комментарий для бармена</span>
+            <Textarea
+              value={correctionComment}
+              onChange={(event) => {
+                setCorrectionComment(event.target.value);
+                setCorrectionError(null);
+              }}
+              placeholder="Что нужно проверить или исправить"
+              rows={5}
+            />
+          </label>
+          {correctionError && <p className="text-sm text-destructive">{correctionError}</p>}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setCorrectionOpen(false)}
+              disabled={correctionMutation.isPending}
+            >
+              Отмена
+            </Button>
+            <Button
+              type="button"
+              onClick={submitCorrection}
+              disabled={correctionMutation.isPending}
+            >
+              {correctionMutation.isPending ? "Возврат..." : "Вернуть"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="flex flex-wrap gap-1.5">
         <FilterPill active={filter === "all"} onClick={() => setFilter("all")}>
@@ -224,4 +334,11 @@ function StatusBadge({ status }: { status: DiscrepancyStatus }) {
   if (status === "shortage")
     return <Badge className="bg-destructive text-destructive-foreground">недостача</Badge>;
   return <Badge className="bg-amber-500 text-black">излишек</Badge>;
+}
+
+function inventoryStatusLabel(status: string) {
+  if (status === "draft") return "Черновик";
+  if (status === "completed") return "Закрыт";
+  if (status === "correction_required") return "На доработке";
+  return status;
 }

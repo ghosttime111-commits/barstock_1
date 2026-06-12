@@ -93,10 +93,19 @@ function formatDateForFile(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
+function safeFilePart(value: string) {
+  return (
+    value
+      .trim()
+      .replace(/[^\p{L}\p{N}]+/gu, "_")
+      .replace(/^_+|_+$/g, "") || "Restaurant"
+  );
+}
+
 function translateInventoryStatus(status: string) {
   if (status === "draft") return "Черновик";
   if (status === "closed" || status === "completed") return "Закрыт";
-  if (status === "correction_required") return "Требует корректировки";
+  if (status === "correction_required") return "На доработке";
   return status;
 }
 
@@ -134,7 +143,7 @@ function applyCellStyle(worksheet: XLSX.WorkSheet, row: number, column: number, 
 export function exportInventoryToExcel(report: ExportInventoryReport) {
   const date = new Date(report.inventory.created_at);
   const categoryById = new Map(report.categories.map((category) => [category.id, category.name]));
-  const restaurantName = report.restaurant?.name ?? "";
+  const restaurantName = report.restaurant?.name ?? "Ресторан";
   const rows = report.rows.map((row) => ({
     ...row,
     categoryName: row.category_id ? (categoryById.get(row.category_id) ?? "") : "",
@@ -232,7 +241,11 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Переучёт");
-  XLSX.writeFile(workbook, `barstock-inventory-${formatDateForFile(date)}.xlsx`, {
-    cellStyles: true,
-  });
+  XLSX.writeFile(
+    workbook,
+    `BarStock_${safeFilePart(restaurantName)}_${formatDateForFile(date)}.xlsx`,
+    {
+      cellStyles: true,
+    },
+  );
 }

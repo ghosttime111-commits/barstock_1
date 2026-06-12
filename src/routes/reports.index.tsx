@@ -169,8 +169,8 @@ function ReportsListPage() {
                   позиций: {inv.items_count}
                 </div>
               </div>
-              <Badge variant="secondary">
-                {inv.status === "completed" ? "Закрыт" : "Коррекция"}
+              <Badge variant={inv.status === "correction_required" ? "default" : "secondary"}>
+                {inventoryStatusLabel(inv.status)}
               </Badge>
             </Link>
           </li>
@@ -178,4 +178,11 @@ function ReportsListPage() {
       </ul>
     </div>
   );
+}
+
+function inventoryStatusLabel(status: string) {
+  if (status === "draft") return "Черновик";
+  if (status === "completed") return "Закрыт";
+  if (status === "correction_required") return "На доработке";
+  return status;
 }

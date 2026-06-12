@@ -28,6 +28,7 @@ type InventoryRow = {
   status: string;
   created_at: string;
   created_by: string | null;
+  correction_comment?: string | null;
 };
 
 function getSessionSecret() {
@@ -624,7 +625,7 @@ export const listInventoriesFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: invs, error } = await sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by")
+      .select("id,restaurant_id,status,created_at,created_by,correction_comment")
       .eq("restaurant_id", data.restaurant_id)
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
@@ -649,7 +650,7 @@ export const createInventoryFn = createServerFn({ method: "POST" })
         created_by: ctx.user.id,
         status: "draft",
       })
-      .select("id,restaurant_id,status,created_at,created_by")
+      .select("id,restaurant_id,status,created_at,created_by,correction_comment")
       .single();
     if (error) throw new Error(error.message);
 
@@ -673,15 +674,11 @@ export const getInventoryFn = createServerFn({ method: "POST" })
       await Promise.all([
         sb
           .from("inventories")
-          .select("id,restaurant_id,status,created_at,created_by")
+          .select("id,restaurant_id,status,created_at,created_by,correction_comment")
           .eq("id", data.id)
           .maybeSingle(),
         sb.from("categories").select("id,name").order("name"),
-        sb
-          .from("products")
-          .select("id,name,unit,category_id,status")
-          .eq("status", "approved")
-          .order("name"),
+        sb.from("products").select("id,name,unit,category_id,status").order("name"),
         sb
           .from("inventory_items")
           .select("inventory_id,product_id,quantity")
@@ -691,10 +688,14 @@ export const getInventoryFn = createServerFn({ method: "POST" })
     if (!inv) throw new Error("Переучёт не найден");
     requireBartenderRestaurant(ctx, inv.restaurant_id);
 
+    const countedProductIds = new Set((items ?? []).map((item) => item.product_id));
+
     return {
       inventory: inv,
       categories: cats ?? [],
-      products: prods ?? [],
+      products: (prods ?? []).filter(
+        (product) => product.status === "approved" || countedProductIds.has(product.id),
+      ),
       items: items ?? [],
       discrepancies: [],
     };
@@ -724,7 +725,7 @@ export const upsertItemFn = createServerFn({ method: "POST" })
     if (invError) throw new Error(invError.message);
     if (!inv) throw new Error("Переучёт не найден");
     requireBartenderRestaurant(ctx, inv.restaurant_id);
-    if (inv.status !== "draft") {
+    if (inv.status !== "draft" && inv.status !== "correction_required") {
       throw new Error("Закрытый переучёт нельзя редактировать");
     }
 
@@ -773,7 +774,7 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
     if (!participant && ctx.user.restaurant_id !== inv.restaurant_id) {
       throw new Error("Нет права закрыть этот переучёт");
     }
-    if (inv.status !== "draft") {
+    if (inv.status !== "draft" && inv.status !== "correction_required") {
       throw new Error("Переучёт уже закрыт");
     }
     if ((itemCount ?? 0) < (productCount ?? 0)) {
@@ -782,7 +783,7 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
 
     const { error } = await sb
       .from("inventories")
-      .update({ status: "completed" })
+      .update({ status: "completed", correction_comment: null })
       .eq("id", data.id);
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -827,7 +828,7 @@ export const listClosedInventoriesFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     let query = sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by")
+      .select("id,restaurant_id,status,created_at,created_by,correction_comment")
       .in("status", ["completed", "correction_required"])
       .order("created_at", { ascending: false });
 
@@ -868,6 +869,41 @@ export const deleteInventoryFn = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const requestInventoryCorrectionFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .merge(idSchema)
+      .extend({ correction_comment: z.string().trim().min(1).max(1000) })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { data: inv, error: invError } = await sb
+      .from("inventories")
+      .select("id,status")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (invError) throw new Error(invError.message);
+    if (!inv) throw new Error("Переучёт не найден");
+    if (inv.status === "draft") {
+      throw new Error("Черновик уже доступен бармену для редактирования");
+    }
+
+    const { error } = await sb
+      .from("inventories")
+      .update({
+        status: "correction_required",
+        correction_comment: data.correction_comment.trim(),
+      })
+      .eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
 export const getInventoryReportFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
@@ -888,7 +924,7 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
     ] = await Promise.all([
       sb
         .from("inventories")
-        .select("id,restaurant_id,status,created_at,created_by")
+        .select("id,restaurant_id,status,created_at,created_by,correction_comment")
         .eq("id", data.id)
         .maybeSingle(),
       sb.from("inventories").select("restaurants(id,name)").eq("id", data.id).maybeSingle(),
@@ -958,7 +994,7 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
 
     let inventoryQuery = sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by")
+      .select("id,restaurant_id,status,created_at,created_by,correction_comment")
       .in("status", ["completed", "correction_required"])
       .gte("created_at", start.toISOString())
       .lt("created_at", end.toISOString())
@@ -1072,7 +1108,7 @@ export const listExpectedFn = createServerFn({ method: "POST" })
       await Promise.all([
         sb
           .from("inventories")
-          .select("id,restaurant_id,status,created_at,created_by")
+          .select("id,restaurant_id,status,created_at,created_by,correction_comment")
           .eq("id", data.id)
           .maybeSingle(),
         sb.from("categories").select("id,name").order("name"),

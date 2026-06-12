@@ -118,7 +118,7 @@ function InventoryDetail() {
   }
 
   const { inventory, categories, products } = data;
-  const isClosed = inventory.status !== "draft";
+  const canEdit = inventory.status === "draft" || inventory.status === "correction_required";
   const counted = itemsMap.size;
   const missingCount = Math.max(products.length - counted, 0);
 
@@ -156,16 +156,25 @@ function InventoryDetail() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Badge variant={isClosed ? "secondary" : "default"}>
-            {isClosed ? "Закрыт" : "Открыт"}
+          <Badge variant={canEdit ? "default" : "secondary"}>
+            {inventoryStatusLabel(inventory.status)}
           </Badge>
-          {!isClosed && (
+          {canEdit && (
             <Button onClick={closeWithMissingCheck} disabled={closeMut.isPending}>
               <Lock className="size-4" /> Закрыть
             </Button>
           )}
         </div>
       </div>
+
+      {inventory.status === "correction_required" && inventory.correction_comment && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+          <div className="text-sm font-medium">Комментарий бухгалтера</div>
+          <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
+            {inventory.correction_comment}
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[220px]">
@@ -231,7 +240,7 @@ function InventoryDetail() {
                       key={p.id}
                       product={p}
                       initial={itemsMap.get(p.id)}
-                      disabled={isClosed}
+                      disabled={!canEdit}
                       onSave={async (qty) => {
                         await upsert({
                           data: {
@@ -253,6 +262,13 @@ function InventoryDetail() {
       )}
     </div>
   );
+}
+
+function inventoryStatusLabel(status: string) {
+  if (status === "draft") return "Черновик";
+  if (status === "completed") return "Закрыт";
+  if (status === "correction_required") return "На доработке";
+  return status;
 }
 
 function CategoryPill({

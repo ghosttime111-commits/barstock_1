@@ -111,14 +111,14 @@ function InventoriesPage() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <Badge variant={inv.status === "draft" ? "default" : "secondary"}>
-                  {inv.status === "draft"
-                    ? "Открыт"
-                    : inv.status === "completed"
-                      ? "Закрыт"
-                      : inv.status === "correction_required"
-                        ? "Коррекция"
-                        : inv.status}
+                <Badge
+                  variant={
+                    inv.status === "draft" || inv.status === "correction_required"
+                      ? "default"
+                      : "secondary"
+                  }
+                >
+                  {inventoryStatusLabel(inv.status)}
                 </Badge>
                 <span className="text-xs text-primary underline-offset-2 hover:underline">
                   Открыть →
@@ -130,4 +130,11 @@ function InventoriesPage() {
       </ul>
     </div>
   );
+}
+
+function inventoryStatusLabel(status: string) {
+  if (status === "draft") return "Черновик";
+  if (status === "completed") return "Закрыт";
+  if (status === "correction_required") return "На доработке";
+  return status;
 }

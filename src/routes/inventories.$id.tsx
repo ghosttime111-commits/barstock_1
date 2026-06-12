@@ -123,14 +123,6 @@ function InventoryDetail() {
   const missingCount = Math.max(products.length - counted, 0);
 
   function closeWithMissingCheck() {
-    if (
-      missingCount > 0 &&
-      !window.confirm(
-        `Не заполнено ${missingCount} товаров. Вы действительно хотите завершить переучёт?`,
-      )
-    ) {
-      return;
-    }
     closeMut.mutate();
   }
 
@@ -154,6 +146,11 @@ function InventoryDetail() {
           <p className="text-sm text-muted-foreground">
             Посчитано: {counted} из {products.length} позиций
           </p>
+          {canEdit && missingCount > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Незаполненные позиции при закрытии сохранятся как 0.
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <Badge variant={canEdit ? "default" : "secondary"}>

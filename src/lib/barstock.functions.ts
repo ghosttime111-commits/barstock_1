@@ -752,8 +752,8 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
     const [
       { data: inv, error: invError },
       { data: participant },
-      { count: productCount },
-      { count: itemCount },
+      { data: approvedProducts, error: productsError },
+      { data: existingItems, error: itemsError },
     ] = await Promise.all([
       sb.from("inventories").select("id,restaurant_id,status").eq("id", data.id).maybeSingle(),
       sb
@@ -762,13 +762,12 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
         .eq("inventory_id", data.id)
         .eq("user_id", ctx.user.id)
         .maybeSingle(),
-      sb.from("products").select("id", { count: "exact", head: true }).eq("status", "approved"),
-      sb
-        .from("inventory_items")
-        .select("product_id", { count: "exact", head: true })
-        .eq("inventory_id", data.id),
+      sb.from("products").select("id").eq("status", "approved"),
+      sb.from("inventory_items").select("product_id").eq("inventory_id", data.id),
     ]);
     if (invError) throw new Error(invError.message);
+    if (productsError) throw new Error(productsError.message);
+    if (itemsError) throw new Error(itemsError.message);
     if (!inv) throw new Error("Переучёт не найден");
     requireBartenderRestaurant(ctx, inv.restaurant_id);
     if (!participant && ctx.user.restaurant_id !== inv.restaurant_id) {
@@ -777,8 +776,19 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
     if (inv.status !== "draft" && inv.status !== "correction_required") {
       throw new Error("Переучёт уже закрыт");
     }
-    if ((itemCount ?? 0) < (productCount ?? 0)) {
-      throw new Error("Заполните все позиции перед закрытием");
+
+    const existingProductIds = new Set((existingItems ?? []).map((item) => item.product_id));
+    const missingRows = (approvedProducts ?? [])
+      .filter((product) => !existingProductIds.has(product.id))
+      .map((product) => ({
+        inventory_id: data.id,
+        product_id: product.id,
+        quantity: 0,
+      }));
+
+    if (missingRows.length > 0) {
+      const { error: insertMissingError } = await sb.from("inventory_items").insert(missingRows);
+      if (insertMissingError) throw new Error(insertMissingError.message);
     }
 
     const { error } = await sb

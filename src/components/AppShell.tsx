@@ -54,6 +54,14 @@ export function AppShell({
             )}
           </Link>
           <div className="flex items-center gap-3 text-sm">
+            {isAccountant && (
+              <Link
+                to="/admin"
+                className="font-medium text-muted-foreground transition hover:text-foreground"
+              >
+                Управление
+              </Link>
+            )}
             <span className="text-muted-foreground">
               {session.user.name} · {isAccountant ? "бухгалтер" : "бармен"}
             </span>

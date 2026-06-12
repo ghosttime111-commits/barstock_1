@@ -204,6 +204,113 @@ export const listRestaurantsFn = createServerFn({ method: "POST" })
     return rows ?? [];
   });
 
+export const createRestaurantFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema.extend({ name: z.string().trim().min(1).max(160) }).parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: restaurant, error } = await getBarstock()
+      .from("restaurants")
+      .insert({ name: data.name })
+      .select("id,name")
+      .single();
+    if (error) throw new Error(error.message);
+    return restaurant;
+  });
+
+export const listBartendersFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: rows, error } = await getBarstock()
+      .from("users")
+      .select("id,name,login,restaurant_id")
+      .eq("role", "bartender")
+      .order("name");
+    if (error) throw new Error(error.message);
+    return rows ?? [];
+  });
+
+export const createBartenderFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        name: z.string().trim().min(1).max(160),
+        login: z.string().trim().min(1).max(120),
+        password: z.string().min(6).max(200),
+        restaurant_id: z.string().uuid(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { data: restaurant, error: restaurantError } = await sb
+      .from("restaurants")
+      .select("id")
+      .eq("id", data.restaurant_id)
+      .maybeSingle();
+    if (restaurantError) throw new Error(restaurantError.message);
+    if (!restaurant) throw new Error("Ресторан не найден");
+
+    const { data: user, error } = await sb
+      .from("users")
+      .insert({
+        name: data.name,
+        login: data.login,
+        password_hash: hashPassword(data.password),
+        role: "bartender",
+        restaurant_id: data.restaurant_id,
+      })
+      .select("id,name,login,restaurant_id")
+      .single();
+    if (error) throw new Error(error.message);
+    return user;
+  });
+
+export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema.extend({ id: z.string().uuid(), restaurant_id: z.string().uuid() }).parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const [
+      { data: bartender, error: bartenderError },
+      { data: restaurant, error: restaurantError },
+    ] = await Promise.all([
+      sb.from("users").select("id,role").eq("id", data.id).maybeSingle(),
+      sb.from("restaurants").select("id").eq("id", data.restaurant_id).maybeSingle(),
+    ]);
+    if (bartenderError) throw new Error(bartenderError.message);
+    if (restaurantError) throw new Error(restaurantError.message);
+    if (!bartender || bartender.role !== "bartender") throw new Error("Бармен не найден");
+    if (!restaurant) throw new Error("Ресторан не найден");
+
+    const { data: user, error } = await sb
+      .from("users")
+      .update({ restaurant_id: data.restaurant_id })
+      .eq("id", data.id)
+      .eq("role", "bartender")
+      .select("id,name,login,restaurant_id")
+      .single();
+    if (error) throw new Error(error.message);
+    return user;
+  });
+
 export const listInventoriesFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
     sessionSchema.extend({ restaurant_id: z.string().uuid() }).parse(input),

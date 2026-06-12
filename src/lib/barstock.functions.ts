@@ -123,13 +123,16 @@ async function requireSession(sessionToken: string): Promise<AuthContext> {
   const userId = verifySessionToken(sessionToken);
   const { data: user, error } = await sb
     .from("users")
-    .select("id,name,login,role,restaurant_id")
+    .select("id,name,login,role,restaurant_id,is_active")
     .eq("id", userId)
     .maybeSingle();
 
   if (error) throw new Error(error.message);
   if (!user || (user.role !== "bartender" && user.role !== "accountant")) {
     throw new Error("Пользователь не найден");
+  }
+  if (user.is_active === false) {
+    throw new Error("Пользователь отключён");
   }
 
   return {
@@ -162,12 +165,12 @@ export const loginFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: user, error } = await sb
       .from("users")
-      .select("id,name,login,role,restaurant_id,password_hash")
+      .select("id,name,login,role,restaurant_id,password_hash,is_active")
       .eq("login", data.login)
       .maybeSingle();
 
     if (error) throw new Error(error.message);
-    if (!user || !verifyPassword(data.password, user.password_hash)) {
+    if (!user || user.is_active === false || !verifyPassword(data.password, user.password_hash)) {
       throw new Error("Неверный логин или пароль");
     }
 
@@ -235,6 +238,7 @@ export const listBartendersFn = createServerFn({ method: "POST" })
       .from("users")
       .select("id,name,login,restaurant_id")
       .eq("role", "bartender")
+      .neq("is_active", false)
       .order("name");
     if (error) throw new Error(error.message);
     return rows ?? [];
@@ -273,11 +277,55 @@ export const createBartenderFn = createServerFn({ method: "POST" })
         password_hash: hashPassword(data.password),
         role: "bartender",
         restaurant_id: data.restaurant_id,
+        is_active: true,
       })
       .select("id,name,login,restaurant_id")
       .single();
     if (error) throw new Error(error.message);
     return user;
+  });
+
+export const deleteBartenderFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+    if (ctx.user.id === data.id) {
+      throw new Error("Нельзя удалить текущего пользователя");
+    }
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { data: bartender, error: bartenderError } = await sb
+      .from("users")
+      .select("id,role")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (bartenderError) throw new Error(bartenderError.message);
+    if (!bartender || bartender.role !== "bartender") throw new Error("Бармен не найден");
+
+    const [
+      { count: createdCount, error: createdError },
+      { count: participantCount, error: participantError },
+    ] = await Promise.all([
+      sb.from("inventories").select("id", { count: "exact", head: true }).eq("created_by", data.id),
+      sb
+        .from("inventory_participants")
+        .select("inventory_id", { count: "exact", head: true })
+        .eq("user_id", data.id),
+    ]);
+    if (createdError) throw new Error(createdError.message);
+    if (participantError) throw new Error(participantError.message);
+
+    if ((createdCount ?? 0) > 0 || (participantCount ?? 0) > 0) {
+      const { error } = await sb.from("users").update({ is_active: false }).eq("id", data.id);
+      if (error) throw new Error(error.message);
+      return { ok: true, mode: "soft" };
+    }
+
+    const { error } = await sb.from("users").delete().eq("id", data.id).eq("role", "bartender");
+    if (error) throw new Error(error.message);
+    return { ok: true, mode: "hard" };
   });
 
 export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
@@ -311,6 +359,40 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
       .single();
     if (error) throw new Error(error.message);
     return user;
+  });
+
+export const deleteRestaurantFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const [
+      { count: activeBartendersCount, error: activeBartendersError },
+      { count: inventoriesCount, error: inventoriesError },
+    ] = await Promise.all([
+      sb
+        .from("users")
+        .select("id", { count: "exact", head: true })
+        .eq("role", "bartender")
+        .eq("restaurant_id", data.id)
+        .neq("is_active", false),
+      sb
+        .from("inventories")
+        .select("id", { count: "exact", head: true })
+        .eq("restaurant_id", data.id),
+    ]);
+    if (activeBartendersError) throw new Error(activeBartendersError.message);
+    if (inventoriesError) throw new Error(inventoriesError.message);
+    if ((activeBartendersCount ?? 0) > 0 || (inventoriesCount ?? 0) > 0) {
+      throw new Error("Нельзя удалить ресторан: есть сотрудники или переучёты");
+    }
+
+    const { error } = await sb.from("restaurants").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true };
   });
 
 export const listCategoriesFn = createServerFn({ method: "POST" })

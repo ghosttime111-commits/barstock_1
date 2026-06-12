@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Building2, Package, Save, Tags, UserPlus } from "lucide-react";
+import { Archive, Building2, Package, Save, Tags, Trash2, UserPlus } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 
 import { AppShell } from "@/components/AppShell";
@@ -14,6 +14,8 @@ import {
   createProductFn,
   createRestaurantFn,
   deleteCategoryFn,
+  deleteBartenderFn,
+  deleteRestaurantFn,
   listBartendersFn,
   listCategoriesFn,
   listProductsFn,
@@ -55,6 +57,12 @@ type ProductDraft = {
 const productUnits: ProductUnit[] = ["л", "кг", "шт", "бут"];
 const productStatuses: ProductStatus[] = ["approved", "pending", "archived"];
 
+function productStatusLabel(status: ProductStatus) {
+  if (status === "approved") return "Активен";
+  if (status === "pending") return "На подтверждении";
+  return "В архиве";
+}
+
 function AdminPage() {
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
@@ -64,6 +72,8 @@ function AdminPage() {
   const createRestaurant = useServerFn(createRestaurantFn);
   const listBartenders = useServerFn(listBartendersFn);
   const createBartender = useServerFn(createBartenderFn);
+  const deleteBartender = useServerFn(deleteBartenderFn);
+  const deleteRestaurant = useServerFn(deleteRestaurantFn);
   const updateBartenderRestaurant = useServerFn(updateBartenderRestaurantFn);
   const listCategories = useServerFn(listCategoriesFn);
   const createCategory = useServerFn(createCategoryFn);
@@ -188,6 +198,14 @@ function AdminPage() {
       }),
     onSuccess: refreshAdminData,
   });
+  const deleteBartenderMutation = useMutation({
+    mutationFn: (id: string) => deleteBartender({ data: { id, session_token: sessionToken! } }),
+    onSuccess: refreshAdminData,
+  });
+  const deleteRestaurantMutation = useMutation({
+    mutationFn: (id: string) => deleteRestaurant({ data: { id, session_token: sessionToken! } }),
+    onSuccess: refreshAdminData,
+  });
   const createCategoryMutation = useMutation({
     mutationFn: () =>
       createCategory({ data: { name: categoryName.trim(), session_token: sessionToken! } }),
@@ -272,6 +290,16 @@ function AdminPage() {
     }
   }
 
+  function confirmDeleteBartender(id: string, name: string) {
+    if (!window.confirm(`Удалить бармена "${name}"?`)) return;
+    deleteBartenderMutation.mutate(id);
+  }
+
+  function confirmDeleteRestaurant(id: string, name: string) {
+    if (!window.confirm(`Удалить ресторан "${name}"?`)) return;
+    deleteRestaurantMutation.mutate(id);
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -296,11 +324,33 @@ function AdminPage() {
           </Button>
         </form>
         <ErrorText error={createRestaurantMutation.error} fallback="Не удалось создать ресторан" />
-        <SimpleList
-          loading={restaurantsQuery.isLoading}
-          empty="Ресторанов пока нет."
-          items={restaurants.map((restaurant) => ({ id: restaurant.id, label: restaurant.name }))}
-        />
+        <ErrorText error={deleteRestaurantMutation.error} fallback="Не удалось удалить ресторан" />
+        {restaurantsQuery.isLoading ? (
+          <p className="text-sm text-muted-foreground">Загрузка...</p>
+        ) : restaurants.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Ресторанов пока нет.</p>
+        ) : (
+          <ul className="divide-y divide-border rounded-lg border border-border">
+            {restaurants.map((restaurant) => (
+              <li
+                key={restaurant.id}
+                className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+              >
+                <span>{restaurant.name}</span>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  disabled={deleteRestaurantMutation.isPending}
+                  onClick={() => confirmDeleteRestaurant(restaurant.id, restaurant.name)}
+                >
+                  <Trash2 className="size-4" />
+                  Удалить
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="rounded-xl border border-border bg-card p-4">
@@ -340,6 +390,7 @@ function AdminPage() {
           error={updateBartenderMutation.error}
           fallback="Не удалось изменить ресторан бармена"
         />
+        <ErrorText error={deleteBartenderMutation.error} fallback="Не удалось удалить бармена" />
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-sm">
             <thead className="text-xs uppercase text-muted-foreground">
@@ -348,6 +399,7 @@ function AdminPage() {
                 <th className="px-3 py-2 text-left font-medium">Логин</th>
                 <th className="px-3 py-2 text-left font-medium">Ресторан</th>
                 <th className="px-3 py-2 text-left font-medium">Назначение</th>
+                <th className="px-3 py-2 text-left font-medium">Удаление</th>
               </tr>
             </thead>
             <tbody>
@@ -391,6 +443,18 @@ function AdminPage() {
                           Сохранить
                         </Button>
                       </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={deleteBartenderMutation.isPending}
+                        onClick={() => confirmDeleteBartender(bartender.id, bartender.name)}
+                      >
+                        <Trash2 className="size-4" />
+                        Удалить
+                      </Button>
                     </td>
                   </tr>
                 );
@@ -728,7 +792,7 @@ function StatusSelect({
     >
       {productStatuses.map((status) => (
         <option key={status} value={status}>
-          {status}
+          {productStatusLabel(status)}
         </option>
       ))}
     </select>

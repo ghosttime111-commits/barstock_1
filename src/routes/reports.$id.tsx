@@ -1,12 +1,12 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { ArrowLeft, Download, FileSpreadsheet } from "lucide-react";
+import { ArrowLeft, Download, FileSpreadsheet, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { getInventoryReportFn } from "@/lib/barstock.functions";
+import { deleteInventoryFn, getInventoryReportFn } from "@/lib/barstock.functions";
 import { exportInventoryToExcel } from "@/lib/exportInventoryToExcel";
 import { useSession } from "@/lib/session";
 import type { DiscrepancyStatus } from "@/lib/expectedStock";
@@ -26,13 +26,24 @@ function ReportPage() {
   const { id } = Route.useParams();
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const getReport = useServerFn(getInventoryReportFn);
+  const deleteInventory = useServerFn(deleteInventoryFn);
   const { data, isLoading, error } = useQuery({
     queryKey: ["report", id],
     queryFn: () => getReport({ data: { id, session_token: sessionToken! } }),
     enabled: !!sessionToken,
   });
   const [filter, setFilter] = useState<Filter>("all");
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteInventory({ data: { id, session_token: sessionToken! } }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["reports"] });
+      await navigate({ to: "/reports" });
+    },
+  });
 
   const filtered = useMemo(() => {
     const rows = data?.rows ?? [];
@@ -66,6 +77,14 @@ function ReportPage() {
 
   const { inventory } = data;
 
+  function confirmAndDelete() {
+    const confirmed = window.confirm(
+      "Вы уверены? Перед удалением скачайте Excel-отчёт. Удаление необратимо.",
+    );
+    if (!confirmed) return;
+    deleteMutation.mutate();
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -95,9 +114,27 @@ function ReportPage() {
         </Link>
       </div>
 
-      <Button type="button" variant="secondary" onClick={() => exportInventoryToExcel(data)}>
-        <Download className="size-4" /> Экспорт в Excel
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="secondary" onClick={() => exportInventoryToExcel(data)}>
+          <Download className="size-4" /> Скачать Excel
+        </Button>
+        <Button
+          type="button"
+          variant="destructive"
+          onClick={confirmAndDelete}
+          disabled={deleteMutation.isPending}
+        >
+          <Trash2 className="size-4" />
+          {deleteMutation.isPending ? "Удаление..." : "Удалить переучёт"}
+        </Button>
+      </div>
+      {deleteMutation.error && (
+        <p className="text-sm text-destructive">
+          {deleteMutation.error instanceof Error
+            ? deleteMutation.error.message
+            : "Не удалось удалить переучёт"}
+        </p>
+      )}
 
       <div className="flex flex-wrap gap-1.5">
         <FilterPill active={filter === "all"} onClick={() => setFilter("all")}>

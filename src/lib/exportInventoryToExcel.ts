@@ -101,9 +101,9 @@ function translateInventoryStatus(status: string) {
 }
 
 function translateDiscrepancyStatus(status: ExportRow["status"]) {
-  if (status === "shortage") return "Недостача";
-  if (status === "surplus") return "Излишек";
-  return "Совпадает";
+  if (status === "shortage") return "недостача";
+  if (status === "surplus") return "излишек";
+  return "совпадает";
 }
 
 function getRowStyle(status: ExportRow["status"]) {

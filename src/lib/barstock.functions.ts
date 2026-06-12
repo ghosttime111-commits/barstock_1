@@ -426,6 +426,36 @@ export const listClosedInventoriesFn = createServerFn({ method: "POST" })
     return enrichInventoryRows(sb, invs ?? [], true);
   });
 
+export const deleteInventoryFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { data: inv, error: invError } = await sb
+      .from("inventories")
+      .select("id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (invError) throw new Error(invError.message);
+    if (!inv) throw new Error("Переучёт не найден");
+
+    const childDeletes = await Promise.all([
+      sb.from("inventory_items").delete().eq("inventory_id", data.id),
+      sb.from("expected_items").delete().eq("inventory_id", data.id),
+      sb.from("discrepancies").delete().eq("inventory_id", data.id),
+      sb.from("inventory_participants").delete().eq("inventory_id", data.id),
+    ]);
+    const childError = childDeletes.find((result) => result.error)?.error;
+    if (childError) throw new Error(childError.message);
+
+    const { error } = await sb.from("inventories").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
 export const getInventoryReportFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {

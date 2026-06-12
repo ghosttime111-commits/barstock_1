@@ -565,6 +565,53 @@ export const archiveProductFn = createServerFn({ method: "POST" })
     return product;
   });
 
+export const deleteProductFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { data: product, error: productError } = await sb
+      .from("products")
+      .select("id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (productError) throw new Error(productError.message);
+    if (!product) throw new Error("Товар не найден");
+
+    const [
+      { count: actualCount, error: actualError },
+      { count: expectedCount, error: expectedError },
+    ] = await Promise.all([
+      sb
+        .from("inventory_items")
+        .select("product_id", { count: "exact", head: true })
+        .eq("product_id", data.id),
+      sb
+        .from("expected_items")
+        .select("product_id", { count: "exact", head: true })
+        .eq("product_id", data.id),
+    ]);
+    if (actualError) throw new Error(actualError.message);
+    if (expectedError) throw new Error(expectedError.message);
+
+    if ((actualCount ?? 0) > 0 || (expectedCount ?? 0) > 0) {
+      const { error } = await sb.from("products").update({ status: "archived" }).eq("id", data.id);
+      if (error) throw new Error(error.message);
+      return {
+        ok: true,
+        mode: "archived",
+        message: "Товар использовался в переучётах, поэтому перенесён в архив",
+      };
+    }
+
+    const { error } = await sb.from("products").delete().eq("id", data.id);
+    if (error) throw new Error(error.message);
+    return { ok: true, mode: "deleted", message: "Товар удалён" };
+  });
+
 export const listInventoriesFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
     sessionSchema.extend({ restaurant_id: z.string().uuid() }).parse(input),
@@ -886,6 +933,130 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
         : (restaurant?.restaurants ?? null),
       categories: cats ?? [],
       rows,
+    };
+  });
+
+export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        month: z.string().regex(/^\d{4}-\d{2}$/),
+        restaurant_id: z.string().uuid().nullable().optional(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const { classifyDiscrepancy } = await import("./expectedStock");
+    const sb = getBarstock();
+    const [year, month] = data.month.split("-").map(Number);
+    const start = new Date(Date.UTC(year, month - 1, 1));
+    const end = new Date(Date.UTC(year, month, 1));
+
+    let inventoryQuery = sb
+      .from("inventories")
+      .select("id,restaurant_id,status,created_at,created_by")
+      .in("status", ["completed", "correction_required"])
+      .gte("created_at", start.toISOString())
+      .lt("created_at", end.toISOString())
+      .order("created_at", { ascending: true });
+    if (data.restaurant_id) inventoryQuery = inventoryQuery.eq("restaurant_id", data.restaurant_id);
+
+    const { data: inventories, error: inventoriesError } = await inventoryQuery;
+    if (inventoriesError) throw new Error(inventoriesError.message);
+    const invs = inventories ?? [];
+    const inventoryIds = invs.map((inventory) => inventory.id);
+    const restaurantIds = Array.from(
+      new Set(invs.map((inventory) => inventory.restaurant_id).filter(Boolean)),
+    );
+
+    const [
+      { data: restaurants, error: restaurantsError },
+      { data: categories, error: categoriesError },
+      { data: products, error: productsError },
+      { data: items, error: itemsError },
+      { data: expected, error: expectedError },
+    ] = await Promise.all([
+      restaurantIds.length
+        ? sb.from("restaurants").select("id,name").in("id", restaurantIds)
+        : Promise.resolve({ data: [], error: null }),
+      sb.from("categories").select("id,name").order("name"),
+      sb.from("products").select("id,name,unit,category_id,status").order("name"),
+      inventoryIds.length
+        ? sb
+            .from("inventory_items")
+            .select("inventory_id,product_id,quantity")
+            .in("inventory_id", inventoryIds)
+        : Promise.resolve({ data: [], error: null }),
+      inventoryIds.length
+        ? sb
+            .from("expected_items")
+            .select("inventory_id,product_id,quantity")
+            .in("inventory_id", inventoryIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (restaurantsError) throw new Error(restaurantsError.message);
+    if (categoriesError) throw new Error(categoriesError.message);
+    if (productsError) throw new Error(productsError.message);
+    if (itemsError) throw new Error(itemsError.message);
+    if (expectedError) throw new Error(expectedError.message);
+
+    const restaurantById = new Map(
+      (restaurants ?? []).map((restaurant) => [restaurant.id, restaurant]),
+    );
+    const productById = new Map((products ?? []).map((product) => [product.id, product]));
+    const actualByInventory = new Map<string, Map<string, number>>();
+    const expectedByInventory = new Map<string, Map<string, number>>();
+
+    (items ?? []).forEach((item) => {
+      const map = actualByInventory.get(item.inventory_id) ?? new Map<string, number>();
+      map.set(item.product_id, Number(item.quantity));
+      actualByInventory.set(item.inventory_id, map);
+    });
+    (expected ?? []).forEach((item) => {
+      const map = expectedByInventory.get(item.inventory_id) ?? new Map<string, number>();
+      map.set(item.product_id, Number(item.quantity));
+      expectedByInventory.set(item.inventory_id, map);
+    });
+
+    return {
+      month: data.month,
+      categories: categories ?? [],
+      inventories: invs.map((inventory) => {
+        const actualMap = actualByInventory.get(inventory.id) ?? new Map<string, number>();
+        const expectedMap = expectedByInventory.get(inventory.id) ?? new Map<string, number>();
+        const productIds = Array.from(new Set([...actualMap.keys(), ...expectedMap.keys()]));
+        const rows = productIds.flatMap((productId) => {
+          const product = productById.get(productId);
+          if (!product) return [];
+          const actual = actualMap.get(productId) ?? 0;
+          const hasExpected = expectedMap.has(productId);
+          const expectedQty = expectedMap.get(productId);
+          const diff = actual - (expectedQty ?? 0);
+          return [
+            {
+              product_id: product.id,
+              name: product.name,
+              category_id: product.category_id,
+              unit: product.unit,
+              actual,
+              expected: expectedQty ?? null,
+              expected_set: hasExpected,
+              diff,
+              status: classifyDiscrepancy(diff),
+            },
+          ];
+        });
+
+        return {
+          inventory,
+          restaurant: restaurantById.get(inventory.restaurant_id) ?? null,
+          rows,
+        };
+      }),
     };
   });
 

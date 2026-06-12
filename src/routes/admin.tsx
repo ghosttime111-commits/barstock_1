@@ -15,6 +15,7 @@ import {
   createRestaurantFn,
   deleteCategoryFn,
   deleteBartenderFn,
+  deleteProductFn,
   deleteRestaurantFn,
   listBartendersFn,
   listCategoriesFn,
@@ -83,6 +84,7 @@ function AdminPage() {
   const createProduct = useServerFn(createProductFn);
   const updateProduct = useServerFn(updateProductFn);
   const archiveProduct = useServerFn(archiveProductFn);
+  const deleteProduct = useServerFn(deleteProductFn);
 
   const [restaurantName, setRestaurantName] = useState("");
   const [bartenderName, setBartenderName] = useState("");
@@ -94,6 +96,7 @@ function AdminPage() {
   const [categoryNames, setCategoryNames] = useState<Record<string, string>>({});
   const [productSearch, setProductSearch] = useState("");
   const [productCategoryFilter, setProductCategoryFilter] = useState("all");
+  const [productDeleteMessage, setProductDeleteMessage] = useState<string | null>(null);
   const [productDrafts, setProductDrafts] = useState<Record<string, ProductDraft>>({});
   const [newProduct, setNewProduct] = useState<ProductDraft>({
     name: "",
@@ -239,6 +242,13 @@ function AdminPage() {
     mutationFn: (id: string) => archiveProduct({ data: { id, session_token: sessionToken! } }),
     onSuccess: refreshAdminData,
   });
+  const deleteProductMutation = useMutation({
+    mutationFn: (id: string) => deleteProduct({ data: { id, session_token: sessionToken! } }),
+    onSuccess: async (result) => {
+      setProductDeleteMessage(result.message);
+      await refreshAdminData();
+    },
+  });
 
   function productDraft(product: Product): ProductDraft {
     return (
@@ -298,6 +308,12 @@ function AdminPage() {
   function confirmDeleteRestaurant(id: string, name: string) {
     if (!window.confirm(`Удалить ресторан "${name}"?`)) return;
     deleteRestaurantMutation.mutate(id);
+  }
+
+  function confirmDeleteProduct(id: string, name: string) {
+    if (!window.confirm(`Удалить товар "${name}"?`)) return;
+    setProductDeleteMessage(null);
+    deleteProductMutation.mutate(id);
   }
 
   return (
@@ -552,6 +568,10 @@ function AdminPage() {
         <ErrorText error={createProductMutation.error} fallback="Не удалось создать товар" />
         <ErrorText error={updateProductMutation.error} fallback="Не удалось сохранить товар" />
         <ErrorText error={archiveProductMutation.error} fallback="Не удалось архивировать товар" />
+        <ErrorText error={deleteProductMutation.error} fallback="Не удалось удалить товар" />
+        {productDeleteMessage && (
+          <p className="mb-3 text-sm text-muted-foreground">{productDeleteMessage}</p>
+        )}
 
         <div className="mb-3 flex flex-col gap-2 sm:flex-row">
           <Input
@@ -644,6 +664,16 @@ function AdminPage() {
                         >
                           <Archive className="size-4" />
                           Архив
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="destructive"
+                          disabled={deleteProductMutation.isPending}
+                          onClick={() => confirmDeleteProduct(product.id, product.name)}
+                        >
+                          <Trash2 className="size-4" />
+                          Удалить
                         </Button>
                       </div>
                     </td>

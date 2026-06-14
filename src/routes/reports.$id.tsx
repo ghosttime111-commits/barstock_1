@@ -12,6 +12,7 @@ import {
   requestInventoryCorrectionFn,
 } from "@/lib/barstock.functions";
 import { exportInventoryToExcel } from "@/lib/exportInventoryToExcel";
+import { formatQuantity } from "@/lib/formatQuantity";
 import { useSession } from "@/lib/session";
 import type { DiscrepancyStatus } from "@/lib/expectedStock";
 import {
@@ -284,12 +285,14 @@ function ReportPage() {
                     <div className="font-medium">{r.name}</div>
                     <div className="text-xs text-muted-foreground">{r.unit ?? "шт"}</div>
                   </td>
-                  <td className="px-4 py-2 text-right tabular-nums">{r.actual}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{formatQuantity(r.actual)}</td>
                   <td className="px-4 py-2 text-right tabular-nums">
-                    {r.expected_set === false || r.expected === null ? "" : r.expected}
+                    {r.expected_set === false || r.expected === null
+                      ? ""
+                      : formatQuantity(r.expected)}
                   </td>
                   <td className="px-4 py-2 text-right tabular-nums">
-                    {r.diff > 0 ? `+${r.diff}` : r.diff}
+                    {r.diff > 0 ? `+${formatQuantity(r.diff)}` : formatQuantity(r.diff)}
                   </td>
                   <td className="px-4 py-2">
                     <StatusBadge status={r.status} />

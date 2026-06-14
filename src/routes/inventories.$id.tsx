@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { closeInventoryFn, getInventoryFn, upsertItemFn } from "@/lib/barstock.functions";
+import { formatQuantity } from "@/lib/formatQuantity";
 import { parseQuantityExpression } from "@/lib/quantityExpression";
 import { useSession } from "@/lib/session";
 
@@ -380,7 +381,8 @@ function ItemRow({
         <div className="truncate font-medium">{product.name}</div>
         <div className="text-xs text-muted-foreground">{product.unit ?? "шт"}</div>
         <div className="mt-1 text-xs text-muted-foreground">
-          Итог: <span className="font-medium text-foreground">{currentQuantity}</span>
+          Итог:{" "}
+          <span className="font-medium text-foreground">{formatQuantity(currentQuantity)}</span>
         </div>
       </div>
       <div className="flex flex-col gap-2 sm:items-end">
@@ -415,7 +417,9 @@ function ItemRow({
         <div className="flex items-start gap-2">
           <div className="min-h-[3rem] text-right">
             {preview !== null && !error && (
-              <div className="mb-1 text-xs text-muted-foreground">Итого: {preview}</div>
+              <div className="mb-1 text-xs text-muted-foreground">
+                Итого: {formatQuantity(preview)}
+              </div>
             )}
             {error && <div className="mb-1 max-w-32 text-xs text-destructive">{error}</div>}
           </div>

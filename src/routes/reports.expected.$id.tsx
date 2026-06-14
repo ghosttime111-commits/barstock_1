@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { bulkSetExpectedFn, listExpectedFn, upsertExpectedFn } from "@/lib/barstock.functions";
+import { formatQuantity } from "@/lib/formatQuantity";
 import { useSession } from "@/lib/session";
 
 export const Route = createFileRoute("/reports/expected/$id")({
@@ -200,15 +201,17 @@ function ExpectedPage() {
             </div>
             <PreviewList
               title="Найденные товары"
-              items={preview.matched.map((m) => `${m.name} → ${m.quantity}`)}
+              items={preview.matched.map((m) => `${m.name} → ${formatQuantity(m.quantity)}`)}
             />
             <PreviewList
               title="Не найдено в каталоге"
-              items={preview.unmatched.map((m) => `${m.name} → ${m.quantity}`)}
+              items={preview.unmatched.map((m) => `${m.name} → ${formatQuantity(m.quantity)}`)}
             />
             <PreviewList
               title="Дубликаты (взято последнее значение)"
-              items={preview.duplicates.map((d) => `${d.name}: ${d.quantities.join(", ")}`)}
+              items={preview.duplicates.map(
+                (d) => `${d.name}: ${d.quantities.map(formatQuantity).join(", ")}`,
+              )}
             />
             <div className="flex gap-2">
               <Button

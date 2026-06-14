@@ -1,4 +1,4 @@
-const NUMBER_PART_PATTERN = /^(?:\d+(?:\.\d+)?|\.\d+)$/;
+const NUMBER_PART_PATTERN = /^(?:\d+(?:[.,]\d+)?|[.,]\d+)$/;
 
 export function parseQuantityExpression(input: string): number {
   const expression = input.trim();
@@ -16,7 +16,7 @@ export function parseQuantityExpression(input: string): number {
       throw new Error("Некорректное выражение");
     }
 
-    const value = Number(part);
+    const value = Number(part.replace(",", "."));
     if (!Number.isFinite(value) || value < 0) {
       throw new Error("Некорректное выражение");
     }

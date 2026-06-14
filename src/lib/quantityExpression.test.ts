@@ -19,6 +19,14 @@ test("parseQuantityExpression sums fractional values", () => {
   assert.equal(parseQuantityExpression("0.5+0.25"), 0.75);
 });
 
+test("parseQuantityExpression accepts comma decimals", () => {
+  assert.equal(parseQuantityExpression("0,375"), 0.375);
+});
+
+test("parseQuantityExpression sums comma decimals", () => {
+  assert.equal(parseQuantityExpression("2 + 0,375"), 2.375);
+});
+
 test("parseQuantityExpression rejects repeated plus signs", () => {
   assert.throws(() => parseQuantityExpression("2++3"), /Некорректное выражение/);
 });

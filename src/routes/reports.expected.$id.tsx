@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { bulkSetExpectedFn, listExpectedFn, upsertExpectedFn } from "@/lib/barstock.functions";
 import { formatQuantity } from "@/lib/formatQuantity";
+import { parseQuantityExpression } from "@/lib/quantityExpression";
 import { useSession } from "@/lib/session";
 
 export const Route = createFileRoute("/reports/expected/$id")({
@@ -297,8 +298,10 @@ function ExpectedRow({
   const [error, setError] = useState<string | null>(null);
 
   async function commit() {
-    const num = Number(value.replace(",", "."));
-    if (!Number.isFinite(num) || num < 0) {
+    let num: number;
+    try {
+      num = parseQuantityExpression(value);
+    } catch {
       setError("Введите число от 0");
       return;
     }

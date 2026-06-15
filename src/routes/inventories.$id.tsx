@@ -7,7 +7,19 @@ import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { closeInventoryFn, getInventoryFn, upsertItemFn } from "@/lib/barstock.functions";
+import {
+  closeInventoryFn,
+  getInventoryEntriesFn,
+  getInventoryFn,
+  upsertItemFn,
+} from "@/lib/barstock.functions";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
 import { formatQuantity } from "@/lib/formatQuantity";
 import { parseQuantityExpression } from "@/lib/quantityExpression";
 import { useSession } from "@/lib/session";
@@ -27,6 +39,7 @@ function InventoryDetail() {
   const sessionToken = session?.session_token ?? null;
   const qc = useQueryClient();
   const getInv = useServerFn(getInventoryFn);
+  const getEntries = useServerFn(getInventoryEntriesFn);
   const upsert = useServerFn(upsertItemFn);
   const close = useServerFn(closeInventoryFn);
 
@@ -44,6 +57,7 @@ function InventoryDetail() {
   const [query, setQuery] = useState("");
   const [categoryId, setCategoryId] = useState<string | "all">("all");
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
+  const [historyProduct, setHistoryProduct] = useState<{ id: string; name: string } | null>(null);
 
   const itemsMap = useMemo(() => {
     const m = new Map<string, number>();
@@ -51,15 +65,26 @@ function InventoryDetail() {
     return m;
   }, [data]);
 
-  const entriesMap = useMemo(() => {
-    const map = new Map<string, Array<{ quantity: number; entry_type?: string | null }>>();
-    data?.entries?.forEach((entry) => {
-      const list = map.get(entry.product_id) ?? [];
-      list.push({ quantity: Number(entry.quantity), entry_type: entry.entry_type });
-      map.set(entry.product_id, list);
+  const entryCountsMap = useMemo(() => {
+    const map = new Map<string, number>();
+    data?.entry_counts?.forEach((entry) => {
+      map.set(entry.product_id, Number(entry.count));
     });
     return map;
   }, [data]);
+
+  const historyQuery = useQuery({
+    queryKey: ["inventory-entries", id, historyProduct?.id],
+    queryFn: () =>
+      getEntries({
+        data: {
+          inventory_id: id,
+          product_id: historyProduct!.id,
+          session_token: sessionToken!,
+        },
+      }),
+    enabled: !!sessionToken && !!historyProduct,
+  });
 
   const filtered = useMemo(() => {
     const prods = data?.products ?? [];
@@ -253,7 +278,8 @@ function InventoryDetail() {
                       key={p.id}
                       product={p}
                       initial={itemsMap.get(p.id)}
-                      entries={entriesMap.get(p.id) ?? []}
+                      historyCount={entryCountsMap.get(p.id) ?? 0}
+                      onOpenHistory={() => setHistoryProduct({ id: p.id, name: p.name })}
                       disabled={!canEdit}
                       onSave={async (qty, entryType) => {
                         const result = await upsert({
@@ -276,6 +302,52 @@ function InventoryDetail() {
           ))}
         </div>
       )}
+
+      <Drawer open={!!historyProduct} onOpenChange={(open) => !open && setHistoryProduct(null)}>
+        <DrawerContent className="max-h-[85vh]">
+          <DrawerHeader>
+            <DrawerTitle>История изменений</DrawerTitle>
+            <DrawerDescription>{historyProduct?.name ?? ""}</DrawerDescription>
+          </DrawerHeader>
+          <div className="px-4 pb-6">
+            {historyQuery.isLoading && <p className="text-sm text-muted-foreground">Загрузка...</p>}
+            {historyQuery.error && (
+              <p className="text-sm text-destructive">
+                {historyQuery.error instanceof Error
+                  ? historyQuery.error.message
+                  : "Не удалось загрузить историю"}
+              </p>
+            )}
+            {historyQuery.data && historyQuery.data.entries.length === 0 && (
+              <p className="text-sm text-muted-foreground">Истории пока нет.</p>
+            )}
+            {historyQuery.data && historyQuery.data.entries.length > 0 && (
+              <div className="space-y-3">
+                <ul className="divide-y divide-border rounded-lg border border-border">
+                  {historyQuery.data.entries.map((entry) => (
+                    <li key={entry.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                      <span className="w-12 text-muted-foreground">
+                        {new Date(entry.created_at).toLocaleTimeString("ru-RU", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{entry.user_name ?? "Бармен"}</span>
+                      <span className="font-medium tabular-nums">
+                        {entry.entry_type === "set" ? "=" : "+"}
+                        {formatQuantity(Number(entry.quantity))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {historyQuery.data.total > 5 && (
+                  <p className="text-xs text-muted-foreground">Показаны последние 5 изменений.</p>
+                )}
+              </div>
+            )}
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 }
@@ -312,38 +384,18 @@ function CategoryPill({
   );
 }
 
-function EntryHistory({
-  entries,
-}: {
-  entries: Array<{ quantity: number; entry_type?: string | null }>;
-}) {
-  if (entries.length === 0) return null;
-  const visible = entries.slice(0, 5);
-  const rest = entries.length - visible.length;
-
-  return (
-    <div className="mt-1 flex flex-wrap gap-1 text-xs text-muted-foreground">
-      {visible.map((entry, index) => (
-        <span key={index} className="rounded border border-border px-1.5 py-0.5">
-          {entry.entry_type === "set" ? "=" : "+"}
-          {formatQuantity(entry.quantity)}
-        </span>
-      ))}
-      {rest > 0 && <span className="px-1.5 py-0.5">+ ещё {rest}</span>}
-    </div>
-  );
-}
-
 function ItemRow({
   product,
   initial,
-  entries,
+  historyCount,
+  onOpenHistory,
   disabled,
   onSave,
 }: {
   product: { id: string; name: string; unit: string | null; category_id: string | null };
   initial: number | undefined;
-  entries: Array<{ quantity: number; entry_type?: string | null }>;
+  historyCount: number;
+  onOpenHistory: () => void;
   disabled: boolean;
   onSave: (qty: number, entryType: "add" | "set") => Promise<number>;
 }) {
@@ -425,8 +477,15 @@ function ItemRow({
         <div className="mt-1 text-xs text-muted-foreground">
           Итог:{" "}
           <span className="font-medium text-foreground">{formatQuantity(currentQuantity)}</span>
+          <button
+            type="button"
+            onClick={onOpenHistory}
+            className="ml-2 inline-flex items-center rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground transition hover:text-foreground"
+            aria-label="Открыть историю изменений"
+          >
+            🕒{historyCount}
+          </button>
         </div>
-        <EntryHistory entries={entries} />
       </div>
       <div className="flex flex-col gap-2 sm:items-end">
         <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/30 p-1">

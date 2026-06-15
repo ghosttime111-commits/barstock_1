@@ -700,7 +700,7 @@ export const getInventoryFn = createServerFn({ method: "POST" })
       { data: cats },
       { data: prods },
       { data: items },
-      { data: entries },
+      { data: entryCounts },
     ] = await Promise.all([
       sb
         .from("inventories")
@@ -713,17 +713,20 @@ export const getInventoryFn = createServerFn({ method: "POST" })
         .from("inventory_items")
         .select("inventory_id,product_id,quantity")
         .eq("inventory_id", data.id),
-      sb
-        .from("inventory_item_entries")
-        .select("id,inventory_id,product_id,user_id,quantity,entry_type,created_at")
-        .eq("inventory_id", data.id)
-        .order("created_at", { ascending: false }),
+      sb.from("inventory_item_entries").select("product_id").eq("inventory_id", data.id),
     ]);
     if (e1) throw new Error(e1.message);
     if (!inv) throw new Error("Переучёт не найден");
     requireBartenderRestaurant(ctx, inv.restaurant_id);
 
     const countedProductIds = new Set((items ?? []).map((item) => item.product_id));
+    const entryCountsByProduct = (entryCounts ?? []).reduce<Record<string, number>>(
+      (acc, entry) => {
+        acc[entry.product_id] = (acc[entry.product_id] ?? 0) + 1;
+        return acc;
+      },
+      {},
+    );
 
     return {
       inventory: inv,
@@ -732,8 +735,71 @@ export const getInventoryFn = createServerFn({ method: "POST" })
         (product) => product.status === "approved" || countedProductIds.has(product.id),
       ),
       items: items ?? [],
-      entries: entries ?? [],
+      entry_counts: Object.entries(entryCountsByProduct).map(([product_id, count]) => ({
+        product_id,
+        count,
+      })),
       discrepancies: [],
+    };
+  });
+
+export const getInventoryEntriesFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        inventory_id: z.string().uuid(),
+        product_id: z.string().uuid(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "bartender");
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { data: inv, error: invError } = await sb
+      .from("inventories")
+      .select("id,restaurant_id")
+      .eq("id", data.inventory_id)
+      .maybeSingle();
+    if (invError) throw new Error(invError.message);
+    if (!inv) throw new Error("Переучёт не найден");
+    requireBartenderRestaurant(ctx, inv.restaurant_id);
+
+    const {
+      data: entries,
+      error,
+      count,
+    } = await sb
+      .from("inventory_item_entries")
+      .select("id,product_id,user_id,quantity,entry_type,created_at", { count: "exact" })
+      .eq("inventory_id", data.inventory_id)
+      .eq("product_id", data.product_id)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    if (error) throw new Error(error.message);
+
+    const userIds = Array.from(
+      new Set((entries ?? []).map((entry) => entry.user_id).filter(Boolean) as string[]),
+    );
+    let users: Record<string, string> = {};
+    if (userIds.length) {
+      const { data: rows, error: usersError } = await sb
+        .from("users")
+        .select("id,name")
+        .in("id", userIds);
+      if (usersError) throw new Error(usersError.message);
+      users = Object.fromEntries((rows ?? []).map((user) => [user.id, user.name]));
+    }
+
+    return {
+      entries: (entries ?? []).map((entry) => ({
+        ...entry,
+        quantity: Number(entry.quantity),
+        user_name: entry.user_id ? (users[entry.user_id] ?? null) : null,
+      })),
+      total: count ?? entries?.length ?? 0,
     };
   });
 

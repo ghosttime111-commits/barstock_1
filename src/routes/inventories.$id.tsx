@@ -51,6 +51,16 @@ function InventoryDetail() {
     return m;
   }, [data]);
 
+  const entriesMap = useMemo(() => {
+    const map = new Map<string, Array<{ quantity: number; entry_type?: string | null }>>();
+    data?.entries?.forEach((entry) => {
+      const list = map.get(entry.product_id) ?? [];
+      list.push({ quantity: Number(entry.quantity), entry_type: entry.entry_type });
+      map.set(entry.product_id, list);
+    });
+    return map;
+  }, [data]);
+
   const filtered = useMemo(() => {
     const prods = data?.products ?? [];
     const q = query.trim().toLowerCase();
@@ -243,17 +253,20 @@ function InventoryDetail() {
                       key={p.id}
                       product={p}
                       initial={itemsMap.get(p.id)}
+                      entries={entriesMap.get(p.id) ?? []}
                       disabled={!canEdit}
-                      onSave={async (qty) => {
-                        await upsert({
+                      onSave={async (qty, entryType) => {
+                        const result = await upsert({
                           data: {
                             inventory_id: id,
                             product_id: p.id,
                             quantity: qty,
+                            entry_type: entryType,
                             session_token: sessionToken!,
                           },
                         });
                         qc.invalidateQueries({ queryKey: ["inventory", id] });
+                        return Number(result.quantity);
                       }}
                     />
                   ))}
@@ -299,16 +312,40 @@ function CategoryPill({
   );
 }
 
+function EntryHistory({
+  entries,
+}: {
+  entries: Array<{ quantity: number; entry_type?: string | null }>;
+}) {
+  if (entries.length === 0) return null;
+  const visible = entries.slice(0, 5);
+  const rest = entries.length - visible.length;
+
+  return (
+    <div className="mt-1 flex flex-wrap gap-1 text-xs text-muted-foreground">
+      {visible.map((entry, index) => (
+        <span key={index} className="rounded border border-border px-1.5 py-0.5">
+          {entry.entry_type === "set" ? "=" : "+"}
+          {formatQuantity(entry.quantity)}
+        </span>
+      ))}
+      {rest > 0 && <span className="px-1.5 py-0.5">+ ещё {rest}</span>}
+    </div>
+  );
+}
+
 function ItemRow({
   product,
   initial,
+  entries,
   disabled,
   onSave,
 }: {
   product: { id: string; name: string; unit: string | null; category_id: string | null };
   initial: number | undefined;
+  entries: Array<{ quantity: number; entry_type?: string | null }>;
   disabled: boolean;
-  onSave: (qty: number) => Promise<void>;
+  onSave: (qty: number, entryType: "add" | "set") => Promise<number>;
 }) {
   const [value, setValue] = useState("");
   const [mode, setMode] = useState<"fact" | "add">("add");
@@ -370,9 +407,9 @@ function ItemRow({
     }
     setSaving(true);
     try {
-      await onSave(normalizedQuantity);
-      setDisplayQuantity(normalizedQuantity);
-      setValue(mode === "add" ? "" : String(normalizedQuantity));
+      const savedQuantity = await onSave(entered, mode === "add" ? "add" : "set");
+      setDisplayQuantity(savedQuantity);
+      setValue(mode === "add" ? "" : String(savedQuantity));
       setError(null);
       setSaved(true);
     } finally {
@@ -389,6 +426,7 @@ function ItemRow({
           Итог:{" "}
           <span className="font-medium text-foreground">{formatQuantity(currentQuantity)}</span>
         </div>
+        <EntryHistory entries={entries} />
       </div>
       <div className="flex flex-col gap-2 sm:items-end">
         <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted/30 p-1">

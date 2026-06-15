@@ -9,6 +9,7 @@ const PASSWORD_ITERATIONS = 210_000;
 const productUnitSchema = z.enum(["л", "кг", "шт", "бут"]);
 const productStatusSchema = z.enum(["approved", "pending", "archived"]);
 const moneySchema = z.number().min(0).max(1_000_000);
+const inventoryEntryTypeSchema = z.enum(["add", "set"]);
 
 type AuthUser = {
   id: string;
@@ -694,20 +695,30 @@ export const getInventoryFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
-    const [{ data: inv, error: e1 }, { data: cats }, { data: prods }, { data: items }] =
-      await Promise.all([
-        sb
-          .from("inventories")
-          .select("id,restaurant_id,status,created_at,created_by,correction_comment")
-          .eq("id", data.id)
-          .maybeSingle(),
-        sb.from("categories").select("id,name").order("name"),
-        sb.from("products").select("id,name,unit,category_id,status").order("name"),
-        sb
-          .from("inventory_items")
-          .select("inventory_id,product_id,quantity")
-          .eq("inventory_id", data.id),
-      ]);
+    const [
+      { data: inv, error: e1 },
+      { data: cats },
+      { data: prods },
+      { data: items },
+      { data: entries },
+    ] = await Promise.all([
+      sb
+        .from("inventories")
+        .select("id,restaurant_id,status,created_at,created_by,correction_comment")
+        .eq("id", data.id)
+        .maybeSingle(),
+      sb.from("categories").select("id,name").order("name"),
+      sb.from("products").select("id,name,unit,category_id,status").order("name"),
+      sb
+        .from("inventory_items")
+        .select("inventory_id,product_id,quantity")
+        .eq("inventory_id", data.id),
+      sb
+        .from("inventory_item_entries")
+        .select("id,inventory_id,product_id,user_id,quantity,entry_type,created_at")
+        .eq("inventory_id", data.id)
+        .order("created_at", { ascending: false }),
+    ]);
     if (e1) throw new Error(e1.message);
     if (!inv) throw new Error("Переучёт не найден");
     requireBartenderRestaurant(ctx, inv.restaurant_id);
@@ -721,6 +732,7 @@ export const getInventoryFn = createServerFn({ method: "POST" })
         (product) => product.status === "approved" || countedProductIds.has(product.id),
       ),
       items: items ?? [],
+      entries: entries ?? [],
       discrepancies: [],
     };
   });
@@ -732,6 +744,7 @@ export const upsertItemFn = createServerFn({ method: "POST" })
         inventory_id: z.string().uuid(),
         product_id: z.string().uuid(),
         quantity: z.number().min(0).max(1_000_000),
+        entry_type: inventoryEntryTypeSchema.default("set"),
       })
       .parse(input),
   )
@@ -753,16 +766,39 @@ export const upsertItemFn = createServerFn({ method: "POST" })
       throw new Error("Закрытый переучёт нельзя редактировать");
     }
 
+    const { data: currentItem, error: currentItemError } = await sb
+      .from("inventory_items")
+      .select("quantity")
+      .eq("inventory_id", data.inventory_id)
+      .eq("product_id", data.product_id)
+      .maybeSingle();
+    if (currentItemError) throw new Error(currentItemError.message);
+
+    const currentQuantity = Number(currentItem?.quantity ?? 0);
+    const nextQuantity =
+      data.entry_type === "add" ? currentQuantity + data.quantity : data.quantity;
+    const normalizedQuantity = Math.round(nextQuantity * 1_000_000_000_000) / 1_000_000_000_000;
+
     const { error } = await sb.from("inventory_items").upsert(
       {
         inventory_id: data.inventory_id,
         product_id: data.product_id,
-        quantity: data.quantity,
+        quantity: normalizedQuantity,
       },
       { onConflict: "inventory_id,product_id" },
     );
     if (error) throw new Error(error.message);
-    return { ok: true };
+
+    const { error: entryError } = await sb.from("inventory_item_entries").insert({
+      inventory_id: data.inventory_id,
+      product_id: data.product_id,
+      user_id: ctx.user.id,
+      quantity: data.quantity,
+      entry_type: data.entry_type,
+    });
+    if (entryError) throw new Error(entryError.message);
+
+    return { ok: true, quantity: normalizedQuantity };
   });
 
 export const closeInventoryFn = createServerFn({ method: "POST" })

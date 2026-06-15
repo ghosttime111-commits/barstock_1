@@ -310,8 +310,8 @@ function ItemRow({
   disabled: boolean;
   onSave: (qty: number) => Promise<void>;
 }) {
-  const [value, setValue] = useState<string>(initial !== undefined ? String(initial) : "");
-  const [mode, setMode] = useState<"fact" | "add">("fact");
+  const [value, setValue] = useState("");
+  const [mode, setMode] = useState<"fact" | "add">("add");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<boolean>(initial !== undefined);
@@ -345,6 +345,11 @@ function ItemRow({
 
   async function commit() {
     if (disabled || saving) return;
+    if (!value.trim()) {
+      setError(null);
+      setSaved(initial !== undefined);
+      return;
+    }
 
     let entered: number;
     try {
@@ -390,19 +395,6 @@ function ItemRow({
           <button
             type="button"
             disabled={disabled}
-            onClick={() => changeMode("fact")}
-            className={
-              "min-h-10 rounded-md px-3 text-sm font-medium transition " +
-              (mode === "fact"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-background hover:text-foreground")
-            }
-          >
-            Факт
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
             onClick={() => changeMode("add")}
             className={
               "min-h-10 rounded-md px-3 text-sm font-medium transition " +
@@ -412,6 +404,19 @@ function ItemRow({
             }
           >
             + Добавить
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => changeMode("fact")}
+            className={
+              "min-h-10 rounded-md px-3 text-sm font-medium transition " +
+              (mode === "fact"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-background hover:text-foreground")
+            }
+          >
+            Факт
           </button>
         </div>
         <div className="flex items-start gap-2">

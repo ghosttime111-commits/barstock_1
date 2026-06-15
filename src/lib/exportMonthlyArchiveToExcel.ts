@@ -25,6 +25,8 @@ type ArchiveRow = {
   expected: number | null;
   expected_set?: boolean;
   diff: number;
+  unit_price?: number | null;
+  money_diff?: number | null;
   status: "shortage" | "surplus" | "match";
 };
 
@@ -81,6 +83,14 @@ function numberValue(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function moneyValue(row: ArchiveRow) {
+  return numberValue(row.money_diff ?? row.diff * numberValue(row.unit_price));
+}
+
+function formatMoney(value: number) {
+  return (Object.is(value, -0) ? 0 : value).toFixed(2);
+}
+
 export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
   const categoryById = new Map(archive.categories.map((category) => [category.id, category.name]));
   const workbook = XLSX.utils.book_new();
@@ -102,6 +112,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
       "Количество расхождений",
       "Сумма недостач",
       "Сумма излишков",
+      "Итого BYN",
     ],
     ...archive.inventories.map((report) => {
       const shortageSum = report.rows
@@ -110,6 +121,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
       const surplusSum = report.rows
         .filter((row) => row.status === "surplus")
         .reduce((sum, row) => sum + numberValue(row.diff), 0);
+      const moneySum = report.rows.reduce((sum, row) => sum + moneyValue(row), 0);
 
       return [
         formatDate(report.inventory.created_at),
@@ -118,6 +130,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
         report.rows.filter((row) => row.status !== "match").length,
         shortageSum,
         surplusSum,
+        formatMoney(moneySum),
       ];
     }),
   ];
@@ -130,6 +143,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
     { wch: 22 },
     { wch: 16 },
     { wch: 16 },
+    { wch: 16 },
   ];
   XLSX.utils.book_append_sheet(workbook, summarySheet, "Сводка");
 
@@ -140,7 +154,17 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
       ["Дата переучёта:", formatDate(report.inventory.created_at)],
       ["Статус:", report.inventory.status],
       [],
-      ["Товар", "Категория", "Единица", "Факт", "Учёт", "Разница", "Статус"],
+      [
+        "Товар",
+        "Категория",
+        "Единица",
+        "Факт",
+        "Учёт",
+        "Разница",
+        "Цена за ед., BYN",
+        "Сумма, BYN",
+        "Статус",
+      ],
       ...report.rows.map((row) => [
         row.name,
         row.category_id ? (categoryById.get(row.category_id) ?? "") : "",
@@ -148,6 +172,8 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
         row.actual,
         row.expected_set === false || row.expected === null ? "" : row.expected,
         row.diff,
+        formatMoney(numberValue(row.unit_price)),
+        formatMoney(moneyValue(row)),
         translateStatus(row.status),
       ]),
     ];
@@ -159,6 +185,8 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
       { wch: 12 },
       { wch: 12 },
       { wch: 12 },
+      { wch: 16 },
+      { wch: 16 },
       { wch: 16 },
     ];
     XLSX.utils.book_append_sheet(

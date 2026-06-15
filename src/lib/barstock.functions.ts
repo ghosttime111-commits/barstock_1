@@ -8,6 +8,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const PASSWORD_ITERATIONS = 210_000;
 const productUnitSchema = z.enum(["л", "кг", "шт", "бут"]);
 const productStatusSchema = z.enum(["approved", "pending", "archived"]);
+const moneySchema = z.number().min(0).max(1_000_000);
 
 type AuthUser = {
   id: string;
@@ -498,7 +499,7 @@ export const listProductsFn = createServerFn({ method: "POST" })
     const { getBarstock } = await import("./barstock.server");
     const { data: rows, error } = await getBarstock()
       .from("products")
-      .select("id,name,category_id,unit,status")
+      .select("id,name,category_id,unit,status,unit_price")
       .order("name");
     if (error) throw new Error(error.message);
     return rows ?? [];
@@ -512,6 +513,7 @@ export const createProductFn = createServerFn({ method: "POST" })
         category_id: z.string().uuid(),
         unit: productUnitSchema,
         status: productStatusSchema.default("approved"),
+        unit_price: moneySchema.default(0),
       })
       .parse(input),
   )
@@ -527,8 +529,9 @@ export const createProductFn = createServerFn({ method: "POST" })
         category_id: data.category_id,
         unit: data.unit,
         status: data.status,
+        unit_price: data.unit_price,
       })
-      .select("id,name,category_id,unit,status")
+      .select("id,name,category_id,unit,status,unit_price")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -543,6 +546,7 @@ export const updateProductFn = createServerFn({ method: "POST" })
         category_id: z.string().uuid(),
         unit: productUnitSchema,
         status: productStatusSchema,
+        unit_price: moneySchema,
       })
       .parse(input),
   )
@@ -558,9 +562,10 @@ export const updateProductFn = createServerFn({ method: "POST" })
         category_id: data.category_id,
         unit: data.unit,
         status: data.status,
+        unit_price: data.unit_price,
       })
       .eq("id", data.id)
-      .select("id,name,category_id,unit,status")
+      .select("id,name,category_id,unit,status,unit_price")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -577,7 +582,7 @@ export const archiveProductFn = createServerFn({ method: "POST" })
       .from("products")
       .update({ status: "archived" })
       .eq("id", data.id)
-      .select("id,name,category_id,unit,status")
+      .select("id,name,category_id,unit,status,unit_price")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -969,7 +974,7 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
         .maybeSingle(),
       sb.from("inventories").select("restaurants(id,name)").eq("id", data.id).maybeSingle(),
       sb.from("categories").select("id,name").order("name"),
-      sb.from("products").select("id,name,unit,category_id,status").order("name"),
+      sb.from("products").select("id,name,unit,category_id,status,unit_price").order("name"),
       sb.from("inventory_items").select("product_id,quantity").eq("inventory_id", data.id),
       sb.from("expected_items").select("product_id,quantity").eq("inventory_id", data.id),
       sb.from("discrepancies").select("comment").eq("inventory_id", data.id).maybeSingle(),
@@ -988,16 +993,19 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
         const hasExpected = expectedMap.has(p.id);
         const expectedQty = expectedMap.get(p.id);
         const diff = actual - (expectedQty ?? 0);
+        const unitPrice = Number(p.unit_price ?? 0);
         const status = classifyDiscrepancy(diff);
         return {
           product_id: p.id,
           name: p.name,
           unit: p.unit,
           category_id: p.category_id,
+          unit_price: unitPrice,
           actual,
           expected: expectedQty ?? null,
           expected_set: hasExpected,
           diff,
+          money_diff: diff * unitPrice,
           status,
           comment: status === "match" ? "" : (discrepancy?.comment ?? ""),
         };
@@ -1060,7 +1068,7 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
         ? sb.from("restaurants").select("id,name").in("id", restaurantIds)
         : Promise.resolve({ data: [], error: null }),
       sb.from("categories").select("id,name").order("name"),
-      sb.from("products").select("id,name,unit,category_id,status").order("name"),
+      sb.from("products").select("id,name,unit,category_id,status,unit_price").order("name"),
       inventoryIds.length
         ? sb
             .from("inventory_items")
@@ -1112,16 +1120,19 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
           const hasExpected = expectedMap.has(productId);
           const expectedQty = expectedMap.get(productId);
           const diff = actual - (expectedQty ?? 0);
+          const unitPrice = Number(product.unit_price ?? 0);
           return [
             {
               product_id: product.id,
               name: product.name,
               category_id: product.category_id,
               unit: product.unit,
+              unit_price: unitPrice,
               actual,
               expected: expectedQty ?? null,
               expected_set: hasExpected,
               diff,
+              money_diff: diff * unitPrice,
               status: classifyDiscrepancy(diff),
             },
           ];

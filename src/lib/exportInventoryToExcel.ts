@@ -23,6 +23,8 @@ type ExportRow = {
   expected: number | null;
   expected_set?: boolean;
   diff: number;
+  unit_price?: number | null;
+  money_diff?: number | null;
   status: "shortage" | "surplus" | "match";
   comment?: string | null;
 };
@@ -39,7 +41,7 @@ type CellStyle = NonNullable<XLSX.CellObject["s"]>;
 const titleRowIndex = 0;
 const metaStartRowIndex = 2;
 const tableHeaderRowIndex = 6;
-const tableColumnCount = 8;
+const tableColumnCount = 10;
 
 const thinBlackBorder = {
   top: { style: "thin", color: { rgb: "000000" } },
@@ -134,6 +136,11 @@ function getAutoWidth(values: Array<string | number>, min = 10, max = 40) {
   return Math.min(Math.max(longest + 2, min), max);
 }
 
+function formatMoney(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "0.00";
+  return (Object.is(value, -0) ? 0 : value).toFixed(2);
+}
+
 function applyCellStyle(worksheet: XLSX.WorkSheet, row: number, column: number, style: CellStyle) {
   const cellAddress = XLSX.utils.encode_cell({ r: row, c: column });
   const cell = worksheet[cellAddress];
@@ -148,6 +155,8 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
     ...row,
     categoryName: row.category_id ? (categoryById.get(row.category_id) ?? "") : "",
     expectedValue: row.expected_set === false || row.expected === null ? "" : row.expected,
+    unitPriceValue: formatMoney(Number(row.unit_price ?? 0)),
+    moneyDiffValue: formatMoney(Number(row.money_diff ?? 0)),
     statusText: translateDiscrepancyStatus(row.status),
     commentText: row.comment ?? "",
   }));
@@ -158,9 +167,10 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
       if (row.status === "shortage") acc.shortage += 1;
       if (row.status === "surplus") acc.surplus += 1;
       if (row.status === "match") acc.match += 1;
+      acc.money += Number(row.money_diff ?? 0);
       return acc;
     },
-    { total: 0, shortage: 0, surplus: 0, match: 0 },
+    { total: 0, shortage: 0, surplus: 0, match: 0, money: 0 },
   );
 
   const tableHeaders = [
@@ -170,6 +180,8 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
     "Фактический остаток",
     "Учётный остаток",
     "Разница",
+    "Цена за ед., BYN",
+    "Сумма, BYN",
     "Статус расхождения",
     "Комментарий бухгалтера",
   ];
@@ -181,6 +193,8 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
     row.actual,
     row.expectedValue,
     row.diff,
+    row.unitPriceValue,
+    row.moneyDiffValue,
     row.statusText,
     row.commentText,
   ]);
@@ -200,6 +214,7 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
     ["Недостач:", totals.shortage],
     ["Излишков:", totals.surplus],
     ["Совпадений:", totals.match],
+    ["Итого расхождение, BYN:", formatMoney(totals.money)],
   ];
 
   const worksheet = XLSX.utils.aoa_to_sheet(sheetRows);
@@ -210,10 +225,12 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
     { wch: getAutoWidth([tableHeaders[3], ...rows.map((row) => row.actual)], 10, 24) },
     { wch: getAutoWidth([tableHeaders[4], ...rows.map((row) => row.expectedValue)], 10, 24) },
     { wch: getAutoWidth([tableHeaders[5], ...rows.map((row) => row.diff)], 10, 18) },
-    { wch: getAutoWidth([tableHeaders[6], ...rows.map((row) => row.statusText)], 10, 28) },
-    { wch: getAutoWidth([tableHeaders[7], ...rows.map((row) => row.commentText)], 16, 50) },
+    { wch: getAutoWidth([tableHeaders[6], ...rows.map((row) => row.unitPriceValue)], 12, 22) },
+    { wch: getAutoWidth([tableHeaders[7], ...rows.map((row) => row.moneyDiffValue)], 12, 22) },
+    { wch: getAutoWidth([tableHeaders[8], ...rows.map((row) => row.statusText)], 10, 28) },
+    { wch: getAutoWidth([tableHeaders[9], ...rows.map((row) => row.commentText)], 16, 50) },
   ];
-  worksheet["!merges"] = [{ s: { r: titleRowIndex, c: 0 }, e: { r: titleRowIndex, c: 7 } }];
+  worksheet["!merges"] = [{ s: { r: titleRowIndex, c: 0 }, e: { r: titleRowIndex, c: 9 } }];
   worksheet["!freeze"] = { xSplit: 0, ySplit: tableHeaderRowIndex + 1 };
 
   applyCellStyle(worksheet, titleRowIndex, 0, titleStyle);
@@ -235,7 +252,7 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
     }
   });
 
-  for (let row = summaryStartRowIndex; row < summaryStartRowIndex + 4; row += 1) {
+  for (let row = summaryStartRowIndex; row < summaryStartRowIndex + 5; row += 1) {
     applyCellStyle(worksheet, row, 0, summaryLabelStyle);
   }
 

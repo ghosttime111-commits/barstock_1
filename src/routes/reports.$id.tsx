@@ -12,6 +12,7 @@ import {
   requestInventoryCorrectionFn,
 } from "@/lib/barstock.functions";
 import { exportInventoryToExcel } from "@/lib/exportInventoryToExcel";
+import { formatMoney } from "@/lib/formatMoney";
 import { formatQuantity } from "@/lib/formatQuantity";
 import { useSession } from "@/lib/session";
 import type { DiscrepancyStatus } from "@/lib/expectedStock";
@@ -99,6 +100,7 @@ function ReportPage() {
       match: rows.filter((r) => r.status === "match").length,
       shortage: rows.filter((r) => r.status === "shortage").length,
       surplus: rows.filter((r) => r.status === "surplus").length,
+      money: rows.reduce((sum, row) => sum + Number(row.money_diff ?? 0), 0),
     };
   }, [data]);
 
@@ -151,6 +153,7 @@ function ReportPage() {
           Всего: {totals.total} · совпадает: {totals.match} · недостача: {totals.shortage} ·
           излишек: {totals.surplus}
         </p>
+        <p className="text-sm font-medium">Итого расхождение: {formatMoney(totals.money)} BYN</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Badge variant={isCorrectionRequired ? "default" : "secondary"}>
             {inventoryStatusLabel(inventory.status)}
@@ -275,6 +278,8 @@ function ReportPage() {
                 <th className="px-4 py-2 text-right font-medium">Факт</th>
                 <th className="px-4 py-2 text-right font-medium">Учёт</th>
                 <th className="px-4 py-2 text-right font-medium">Разница</th>
+                <th className="px-4 py-2 text-right font-medium">Цена за ед., BYN</th>
+                <th className="px-4 py-2 text-right font-medium">Сумма, BYN</th>
                 <th className="px-4 py-2 text-left font-medium">Статус</th>
               </tr>
             </thead>
@@ -293,6 +298,12 @@ function ReportPage() {
                   </td>
                   <td className="px-4 py-2 text-right tabular-nums">
                     {r.diff > 0 ? `+${formatQuantity(r.diff)}` : formatQuantity(r.diff)}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums">
+                    {formatMoney(Number(r.unit_price ?? 0))}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums">
+                    {formatMoney(Number(r.money_diff ?? 0))}
                   </td>
                   <td className="px-4 py-2">
                     <StatusBadge status={r.status} />

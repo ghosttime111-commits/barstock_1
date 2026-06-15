@@ -47,12 +47,14 @@ type Product = {
   category_id: string | null;
   unit: ProductUnit | string | null;
   status: ProductStatus | string | null;
+  unit_price: number | string | null;
 };
 type ProductDraft = {
   name: string;
   category_id: string;
   unit: ProductUnit;
   status: ProductStatus;
+  unit_price: string;
 };
 
 const productUnits: ProductUnit[] = ["л", "кг", "шт", "бут"];
@@ -62,6 +64,16 @@ function productStatusLabel(status: ProductStatus) {
   if (status === "approved") return "Активен";
   if (status === "pending") return "На подтверждении";
   return "В архиве";
+}
+
+function parseMoneyInput(value: string) {
+  const normalized = value.trim().replace(",", ".");
+  if (!normalized) return 0;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error("Введите стоимость от 0");
+  }
+  return parsed;
 }
 
 function AdminPage() {
@@ -104,6 +116,7 @@ function AdminPage() {
     category_id: "",
     unit: "бут",
     status: "approved",
+    unit_price: "0",
   });
 
   const restaurantsQuery = useQuery({
@@ -233,15 +246,35 @@ function AdminPage() {
     onSuccess: refreshAdminData,
   });
   const createProductMutation = useMutation({
-    mutationFn: () => createProduct({ data: { ...newProduct, session_token: sessionToken! } }),
+    mutationFn: () =>
+      createProduct({
+        data: {
+          ...newProduct,
+          unit_price: parseMoneyInput(newProduct.unit_price),
+          session_token: sessionToken!,
+        },
+      }),
     onSuccess: async () => {
-      setNewProduct({ name: "", category_id: "", unit: "бут", status: "approved" });
+      setNewProduct({
+        name: "",
+        category_id: "",
+        unit: "бут",
+        status: "approved",
+        unit_price: "0",
+      });
       await refreshAdminData();
     },
   });
   const updateProductMutation = useMutation({
     mutationFn: ({ id, draft }: { id: string; draft: ProductDraft }) =>
-      updateProduct({ data: { id, ...draft, session_token: sessionToken! } }),
+      updateProduct({
+        data: {
+          id,
+          ...draft,
+          unit_price: parseMoneyInput(draft.unit_price),
+          session_token: sessionToken!,
+        },
+      }),
     onSuccess: refreshAdminData,
   });
   const archiveProductMutation = useMutation({
@@ -267,6 +300,7 @@ function AdminPage() {
         status: productStatuses.includes(product.status as ProductStatus)
           ? (product.status as ProductStatus)
           : "pending",
+        unit_price: String(product.unit_price ?? 0),
       }
     );
   }
@@ -547,7 +581,7 @@ function AdminPage() {
 
       <section className="rounded-xl border border-border bg-card p-4">
         <SectionTitle icon={<Package className="size-5 text-primary" />} title="Товары" />
-        <form onSubmit={submitProduct} className="mb-4 grid gap-2 lg:grid-cols-5">
+        <form onSubmit={submitProduct} className="mb-4 grid gap-2 lg:grid-cols-6">
           <Input
             value={newProduct.name}
             onChange={(event) => setNewProduct((prev) => ({ ...prev, name: event.target.value }))}
@@ -565,6 +599,14 @@ function AdminPage() {
           <StatusSelect
             value={newProduct.status}
             onChange={(value) => setNewProduct((prev) => ({ ...prev, status: value }))}
+          />
+          <Input
+            inputMode="decimal"
+            value={newProduct.unit_price}
+            onChange={(event) =>
+              setNewProduct((prev) => ({ ...prev, unit_price: event.target.value }))
+            }
+            placeholder="Стоимость за единицу, BYN"
           />
           <Button
             type="submit"
@@ -610,6 +652,7 @@ function AdminPage() {
                 <th className="px-3 py-2 text-left font-medium">Название</th>
                 <th className="px-3 py-2 text-left font-medium">Категория</th>
                 <th className="px-3 py-2 text-left font-medium">Ед.</th>
+                <th className="px-3 py-2 text-left font-medium">Цена, BYN</th>
                 <th className="px-3 py-2 text-left font-medium">Статус</th>
                 <th className="px-3 py-2 text-left font-medium">Действия</th>
               </tr>
@@ -639,6 +682,16 @@ function AdminPage() {
                       <UnitSelect
                         value={draft.unit}
                         onChange={(value) => setProductDraft(product.id, { unit: value })}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <Input
+                        inputMode="decimal"
+                        value={draft.unit_price}
+                        onChange={(event) =>
+                          setProductDraft(product.id, { unit_price: event.target.value })
+                        }
+                        className="min-w-28 text-right"
                       />
                     </td>
                     <td className="px-3 py-2">

@@ -92,6 +92,7 @@ function AdminPage() {
   const [bartenderPassword, setBartenderPassword] = useState("");
   const [bartenderRestaurantId, setBartenderRestaurantId] = useState("");
   const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [bartenderAssignmentMessage, setBartenderAssignmentMessage] = useState<string | null>(null);
   const [categoryName, setCategoryName] = useState("");
   const [categoryNames, setCategoryNames] = useState<Record<string, string>>({});
   const [productSearch, setProductSearch] = useState("");
@@ -199,7 +200,12 @@ function AdminPage() {
       updateBartenderRestaurant({
         data: { id, restaurant_id: restaurantId, session_token: sessionToken! },
       }),
-    onSuccess: refreshAdminData,
+    onSuccess: async () => {
+      setBartenderAssignmentMessage(
+        "Пользователю нужно войти заново, чтобы увидеть новый ресторан",
+      );
+      await refreshAdminData();
+    },
   });
   const deleteBartenderMutation = useMutation({
     mutationFn: (id: string) => deleteBartender({ data: { id, session_token: sessionToken! } }),
@@ -406,6 +412,9 @@ function AdminPage() {
           error={updateBartenderMutation.error}
           fallback="Не удалось изменить ресторан бармена"
         />
+        {bartenderAssignmentMessage && (
+          <p className="mb-3 text-sm text-muted-foreground">{bartenderAssignmentMessage}</p>
+        )}
         <ErrorText error={deleteBartenderMutation.error} fallback="Не удалось удалить бармена" />
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-sm">

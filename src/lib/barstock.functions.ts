@@ -195,6 +195,23 @@ export const loginFn = createServerFn({ method: "POST" })
     };
   });
 
+export const currentSessionFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    return {
+      user: {
+        id: ctx.user.id,
+        name: ctx.user.name,
+        login: ctx.user.login,
+        role: ctx.user.role,
+        restaurant_id: ctx.user.restaurant_id,
+      },
+      restaurant: ctx.restaurant,
+      session_token: data.session_token,
+    };
+  });
+
 export const listRestaurantsFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.parse(input))
   .handler(async ({ data }) => {
@@ -615,18 +632,19 @@ export const deleteProductFn = createServerFn({ method: "POST" })
 
 export const listInventoriesFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
-    sessionSchema.extend({ restaurant_id: z.string().uuid() }).parse(input),
+    sessionSchema.extend({ restaurant_id: z.string().uuid().optional() }).parse(input),
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireBartenderRestaurant(ctx, data.restaurant_id);
+    requireRole(ctx, "bartender");
+    if (!ctx.user.restaurant_id) throw new Error("У пользователя не указан ресторан");
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
     const { data: invs, error } = await sb
       .from("inventories")
       .select("id,restaurant_id,status,created_at,created_by,correction_comment")
-      .eq("restaurant_id", data.restaurant_id)
+      .eq("restaurant_id", ctx.user.restaurant_id)
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
 
@@ -635,11 +653,12 @@ export const listInventoriesFn = createServerFn({ method: "POST" })
 
 export const createInventoryFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
-    sessionSchema.extend({ restaurant_id: z.string().uuid() }).parse(input),
+    sessionSchema.extend({ restaurant_id: z.string().uuid().optional() }).parse(input),
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireBartenderRestaurant(ctx, data.restaurant_id);
+    requireRole(ctx, "bartender");
+    if (!ctx.user.restaurant_id) throw new Error("У пользователя не указан ресторан");
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();

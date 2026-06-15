@@ -25,33 +25,24 @@ function InventoriesPage() {
   const qc = useQueryClient();
   const list = useServerFn(listInventoriesFn);
   const create = useServerFn(createInventoryFn);
-  const restaurantId = session?.user.restaurant_id ?? null;
   const sessionToken = session?.session_token ?? null;
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["inventories", restaurantId],
-    queryFn: () => list({ data: { restaurant_id: restaurantId!, session_token: sessionToken! } }),
-    enabled: !!restaurantId && !!sessionToken,
+    queryKey: ["inventories", sessionToken],
+    queryFn: () => list({ data: { session_token: sessionToken! } }),
+    enabled: !!sessionToken,
   });
 
   const createMut = useMutation({
     mutationFn: () =>
       create({
-        data: { restaurant_id: restaurantId!, session_token: sessionToken! },
+        data: { session_token: sessionToken! },
       }),
     onSuccess: (inv) => {
       qc.invalidateQueries({ queryKey: ["inventories"] });
       navigate({ to: "/inventories/$id", params: { id: inv.id } });
     },
   });
-
-  if (!restaurantId) {
-    return (
-      <div className="rounded-xl border border-border bg-card p-6 text-muted-foreground">
-        У вашего пользователя не указан ресторан. Привяжите пользователя к ресторану в БД.
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">

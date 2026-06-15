@@ -149,11 +149,6 @@ function ReportPage() {
             timeStyle: "short",
           })}
         </h1>
-        <p className="text-sm text-muted-foreground">
-          Всего: {totals.total} · совпадает: {totals.match} · недостача: {totals.shortage} ·
-          излишек: {totals.surplus}
-        </p>
-        <p className="text-sm font-medium">Итого расхождение: {formatMoney(totals.money)} BYN</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Badge variant={isCorrectionRequired ? "default" : "secondary"}>
             {inventoryStatusLabel(inventory.status)}
@@ -169,6 +164,19 @@ function ReportPage() {
         >
           <FileSpreadsheet className="size-4" /> Учётные остатки (заполнить / импорт Excel)
         </Link>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <SummaryCard label="Всего позиций" value={totals.total} />
+        <SummaryCard label="Совпадает" value={totals.match} />
+        <SummaryCard label="Недостачи" value={totals.shortage} tone="shortage" />
+        <SummaryCard label="Излишки" value={totals.surplus} tone="surplus" />
+        <SummaryCard
+          label="Итог BYN"
+          value={`${formatMoney(totals.money)} BYN`}
+          tone={totals.money < 0 ? "shortage" : totals.money > 0 ? "surplus" : "total"}
+          className="col-span-2 md:col-span-1"
+        />
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -348,6 +356,32 @@ function StatusBadge({ status }: { status: DiscrepancyStatus }) {
   if (status === "shortage")
     return <Badge className="bg-destructive text-destructive-foreground">недостача</Badge>;
   return <Badge className="bg-amber-500 text-black">излишек</Badge>;
+}
+
+function SummaryCard({
+  label,
+  value,
+  tone = "total",
+  className = "",
+}: {
+  label: string;
+  value: number | string;
+  tone?: "total" | "shortage" | "surplus";
+  className?: string;
+}) {
+  const toneClass =
+    tone === "shortage"
+      ? "border-destructive/40 bg-destructive/10"
+      : tone === "surplus"
+        ? "border-emerald-500/40 bg-emerald-500/10"
+        : "border-border bg-card";
+
+  return (
+    <div className={`rounded-lg border p-3 ${toneClass} ${className}`}>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
+    </div>
+  );
 }
 
 function inventoryStatusLabel(status: string) {

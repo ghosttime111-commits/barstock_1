@@ -1,0 +1,1 @@
+import{b as r}from"./barstock.functions-DQ0utsc5.js";const o=[["path",{d:"m12 19-7-7 7-7",key:"1l729n"}],["path",{d:"M19 12H5",key:"x3x0zl"}]],c=r("arrow-left",o);function i(e){if(typeof e!="number"||!Number.isFinite(e))return"";const t=Math.round((e+Number.EPSILON)*1e3)/1e3;return(Object.is(t,-0)?0:t).toFixed(3).replace(/\.?0+$/,"")}export{c as A,i as f};

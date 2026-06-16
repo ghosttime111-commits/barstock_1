@@ -8,14 +8,20 @@ const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const PASSWORD_ITERATIONS = 210_000;
 const productUnitSchema = z.enum(["л", "кг", "шт", "бут"]);
 const productStatusSchema = z.enum(["approved", "pending", "archived"]);
+const staffRoleSchema = z.enum(["bartender", "kitchen_manager", "accountant"]);
+const inventoryAreaSchema = z.enum(["bar", "kitchen"]);
 const moneySchema = z.number().min(0).max(1_000_000);
 const inventoryEntryTypeSchema = z.enum(["add", "set"]);
+
+type StaffRole = z.infer<typeof staffRoleSchema>;
+type InventoryArea = z.infer<typeof inventoryAreaSchema>;
+type OperationalRole = Extract<StaffRole, "bartender" | "kitchen_manager">;
 
 type AuthUser = {
   id: string;
   name: string;
   login: string;
-  role: "bartender" | "accountant";
+  role: StaffRole;
   restaurant_id: string | null;
 };
 
@@ -30,6 +36,7 @@ type InventoryRow = {
   status: string;
   created_at: string;
   created_by: string | null;
+  area?: InventoryArea | string | null;
   correction_comment?: string | null;
 };
 
@@ -131,7 +138,7 @@ async function requireSession(sessionToken: string): Promise<AuthContext> {
     .maybeSingle();
 
   if (error) throw new Error(error.message);
-  if (!user || (user.role !== "bartender" && user.role !== "accountant")) {
+  if (!user || !staffRoleSchema.safeParse(user.role).success) {
     throw new Error("Пользователь не найден");
   }
   if (user.is_active === false) {
@@ -144,16 +151,34 @@ async function requireSession(sessionToken: string): Promise<AuthContext> {
   };
 }
 
-function requireRole(ctx: AuthContext, role: AuthUser["role"]) {
-  if (ctx.user.role !== role) {
+function requireRole(ctx: AuthContext, role: StaffRole | StaffRole[]) {
+  const allowed = Array.isArray(role) ? role : [role];
+  if (!allowed.includes(ctx.user.role)) {
     throw new Error("Недостаточно прав");
   }
 }
 
-function requireBartenderRestaurant(ctx: AuthContext, restaurantId: string | null) {
-  requireRole(ctx, "bartender");
-  if (!ctx.user.restaurant_id || ctx.user.restaurant_id !== restaurantId) {
+function roleArea(role: OperationalRole): InventoryArea {
+  return role === "kitchen_manager" ? "kitchen" : "bar";
+}
+
+function requireOperationalRole(ctx: AuthContext): InventoryArea {
+  requireRole(ctx, ["bartender", "kitchen_manager"]);
+  return roleArea(ctx.user.role as OperationalRole);
+}
+
+function requireOperationalInventoryAccess(
+  ctx: AuthContext,
+  inventory: { restaurant_id: string | null; area?: string | null },
+) {
+  const area = requireOperationalRole(ctx);
+  if (!ctx.user.restaurant_id || ctx.user.restaurant_id !== inventory.restaurant_id) {
     throw new Error("Нет доступа к этому ресторану");
+  }
+  if ((inventory.area ?? "bar") !== area) {
+    throw new Error(
+      "\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u044d\u0442\u043e\u0439 \u0437\u043e\u043d\u0435",
+    );
   }
 }
 
@@ -256,8 +281,8 @@ export const listBartendersFn = createServerFn({ method: "POST" })
     const { getBarstock } = await import("./barstock.server");
     const { data: rows, error } = await getBarstock()
       .from("users")
-      .select("id,name,login,restaurant_id")
-      .eq("role", "bartender")
+      .select("id,name,login,role,restaurant_id,is_active")
+      .in("role", ["bartender", "kitchen_manager", "accountant"])
       .neq("is_active", false)
       .order("name");
     if (error) throw new Error(error.message);
@@ -271,7 +296,8 @@ export const createBartenderFn = createServerFn({ method: "POST" })
         name: z.string().trim().min(1).max(160),
         login: z.string().trim().min(1).max(120),
         password: z.string().min(6).max(200),
-        restaurant_id: z.string().uuid(),
+        role: staffRoleSchema.default("bartender"),
+        restaurant_id: z.string().uuid().nullable().optional(),
       })
       .parse(input),
   )
@@ -281,13 +307,20 @@ export const createBartenderFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
-    const { data: restaurant, error: restaurantError } = await sb
-      .from("restaurants")
-      .select("id")
-      .eq("id", data.restaurant_id)
-      .maybeSingle();
-    if (restaurantError) throw new Error(restaurantError.message);
-    if (!restaurant) throw new Error("Ресторан не найден");
+    const role = data.role;
+    const restaurantId = data.restaurant_id ?? null;
+    if ((role === "bartender" || role === "kitchen_manager") && !restaurantId) {
+      throw new Error("Restaurant is required for this role");
+    }
+    if (restaurantId) {
+      const { data: restaurant, error: restaurantError } = await sb
+        .from("restaurants")
+        .select("id")
+        .eq("id", restaurantId)
+        .maybeSingle();
+      if (restaurantError) throw new Error(restaurantError.message);
+      if (!restaurant) throw new Error("Restaurant not found");
+    }
 
     const { data: user, error } = await sb
       .from("users")
@@ -295,11 +328,11 @@ export const createBartenderFn = createServerFn({ method: "POST" })
         name: data.name,
         login: data.login,
         password_hash: hashPassword(data.password),
-        role: "bartender",
-        restaurant_id: data.restaurant_id,
+        role,
+        restaurant_id: role === "accountant" ? null : restaurantId,
         is_active: true,
       })
-      .select("id,name,login,restaurant_id")
+      .select("id,name,login,role,restaurant_id,is_active")
       .single();
     if (error) throw new Error(error.message);
     return user;
@@ -322,7 +355,8 @@ export const deleteBartenderFn = createServerFn({ method: "POST" })
       .eq("id", data.id)
       .maybeSingle();
     if (bartenderError) throw new Error(bartenderError.message);
-    if (!bartender || bartender.role !== "bartender") throw new Error("Бармен не найден");
+    if (!bartender || !["bartender", "kitchen_manager"].includes(bartender.role))
+      throw new Error("Staff member not found");
 
     const [
       { count: createdCount, error: createdError },
@@ -343,7 +377,11 @@ export const deleteBartenderFn = createServerFn({ method: "POST" })
       return { ok: true, mode: "soft" };
     }
 
-    const { error } = await sb.from("users").delete().eq("id", data.id).eq("role", "bartender");
+    const { error } = await sb
+      .from("users")
+      .delete()
+      .eq("id", data.id)
+      .in("role", ["bartender", "kitchen_manager"]);
     if (error) throw new Error(error.message);
     return { ok: true, mode: "hard" };
   });
@@ -367,15 +405,16 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
     ]);
     if (bartenderError) throw new Error(bartenderError.message);
     if (restaurantError) throw new Error(restaurantError.message);
-    if (!bartender || bartender.role !== "bartender") throw new Error("Бармен не найден");
+    if (!bartender || !["bartender", "kitchen_manager"].includes(bartender.role))
+      throw new Error("Staff member not found");
     if (!restaurant) throw new Error("Ресторан не найден");
 
     const { data: user, error } = await sb
       .from("users")
       .update({ restaurant_id: data.restaurant_id })
       .eq("id", data.id)
-      .eq("role", "bartender")
-      .select("id,name,login,restaurant_id")
+      .in("role", ["bartender", "kitchen_manager"])
+      .select("id,name,login,role,restaurant_id,is_active")
       .single();
     if (error) throw new Error(error.message);
     return user;
@@ -396,7 +435,7 @@ export const deleteRestaurantFn = createServerFn({ method: "POST" })
       sb
         .from("users")
         .select("id", { count: "exact", head: true })
-        .eq("role", "bartender")
+        .in("role", ["bartender", "kitchen_manager"])
         .eq("restaurant_id", data.id)
         .neq("is_active", false),
       sb
@@ -500,7 +539,7 @@ export const listProductsFn = createServerFn({ method: "POST" })
     const { getBarstock } = await import("./barstock.server");
     const { data: rows, error } = await getBarstock()
       .from("products")
-      .select("id,name,category_id,unit,status,unit_price")
+      .select("id,name,category_id,unit,status,unit_price,area")
       .order("name");
     if (error) throw new Error(error.message);
     return rows ?? [];
@@ -515,6 +554,7 @@ export const createProductFn = createServerFn({ method: "POST" })
         unit: productUnitSchema,
         status: productStatusSchema.default("approved"),
         unit_price: moneySchema.default(0),
+        area: inventoryAreaSchema.default("bar"),
       })
       .parse(input),
   )
@@ -531,8 +571,9 @@ export const createProductFn = createServerFn({ method: "POST" })
         unit: data.unit,
         status: data.status,
         unit_price: data.unit_price,
+        area: data.area,
       })
-      .select("id,name,category_id,unit,status,unit_price")
+      .select("id,name,category_id,unit,status,unit_price,area")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -548,6 +589,7 @@ export const updateProductFn = createServerFn({ method: "POST" })
         unit: productUnitSchema,
         status: productStatusSchema,
         unit_price: moneySchema,
+        area: inventoryAreaSchema,
       })
       .parse(input),
   )
@@ -564,9 +606,10 @@ export const updateProductFn = createServerFn({ method: "POST" })
         unit: data.unit,
         status: data.status,
         unit_price: data.unit_price,
+        area: data.area,
       })
       .eq("id", data.id)
-      .select("id,name,category_id,unit,status,unit_price")
+      .select("id,name,category_id,unit,status,unit_price,area")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -583,7 +626,7 @@ export const archiveProductFn = createServerFn({ method: "POST" })
       .from("products")
       .update({ status: "archived" })
       .eq("id", data.id)
-      .select("id,name,category_id,unit,status,unit_price")
+      .select("id,name,category_id,unit,status,unit_price,area")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -642,15 +685,16 @@ export const listInventoriesFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "bartender");
+    const area = requireOperationalRole(ctx);
     if (!ctx.user.restaurant_id) throw new Error("У пользователя не указан ресторан");
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
     const { data: invs, error } = await sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by,correction_comment")
+      .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
       .eq("restaurant_id", ctx.user.restaurant_id)
+      .eq("area", area)
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
 
@@ -663,7 +707,7 @@ export const createInventoryFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "bartender");
+    const area = requireOperationalRole(ctx);
     if (!ctx.user.restaurant_id) throw new Error("У пользователя не указан ресторан");
 
     const { getBarstock } = await import("./barstock.server");
@@ -673,9 +717,10 @@ export const createInventoryFn = createServerFn({ method: "POST" })
       .insert({
         restaurant_id: ctx.user.restaurant_id,
         created_by: ctx.user.id,
+        area,
         status: "draft",
       })
-      .select("id,restaurant_id,status,created_at,created_by,correction_comment")
+      .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
       .single();
     if (error) throw new Error(error.message);
 
@@ -691,7 +736,7 @@ export const getInventoryFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "bartender");
+    requireOperationalRole(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -704,11 +749,11 @@ export const getInventoryFn = createServerFn({ method: "POST" })
     ] = await Promise.all([
       sb
         .from("inventories")
-        .select("id,restaurant_id,status,created_at,created_by,correction_comment")
+        .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
         .eq("id", data.id)
         .maybeSingle(),
       sb.from("categories").select("id,name").order("name"),
-      sb.from("products").select("id,name,unit,category_id,status").order("name"),
+      sb.from("products").select("id,name,unit,category_id,status,area").order("name"),
       sb
         .from("inventory_items")
         .select("inventory_id,product_id,quantity")
@@ -717,7 +762,7 @@ export const getInventoryFn = createServerFn({ method: "POST" })
     ]);
     if (e1) throw new Error(e1.message);
     if (!inv) throw new Error("Переучёт не найден");
-    requireBartenderRestaurant(ctx, inv.restaurant_id);
+    requireOperationalInventoryAccess(ctx, inv);
 
     const countedProductIds = new Set((items ?? []).map((item) => item.product_id));
     const entryCountsByProduct = (entryCounts ?? []).reduce<Record<string, number>>(
@@ -732,7 +777,9 @@ export const getInventoryFn = createServerFn({ method: "POST" })
       inventory: inv,
       categories: cats ?? [],
       products: (prods ?? []).filter(
-        (product) => product.status === "approved" || countedProductIds.has(product.id),
+        (product) =>
+          (product.area ?? "bar") === (inv.area ?? "bar") &&
+          (product.status === "approved" || countedProductIds.has(product.id)),
       ),
       items: items ?? [],
       entry_counts: Object.entries(entryCountsByProduct).map(([product_id, count]) => ({
@@ -754,18 +801,18 @@ export const getInventoryEntriesFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "bartender");
+    requireOperationalRole(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
     const { data: inv, error: invError } = await sb
       .from("inventories")
-      .select("id,restaurant_id")
+      .select("id,restaurant_id,area")
       .eq("id", data.inventory_id)
       .maybeSingle();
     if (invError) throw new Error(invError.message);
     if (!inv) throw new Error("Переучёт не найден");
-    requireBartenderRestaurant(ctx, inv.restaurant_id);
+    requireOperationalInventoryAccess(ctx, inv);
 
     const {
       data: entries,
@@ -816,20 +863,32 @@ export const upsertItemFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "bartender");
+    requireOperationalRole(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
     const { data: inv, error: invError } = await sb
       .from("inventories")
-      .select("id,restaurant_id,status")
+      .select("id,restaurant_id,status,area")
       .eq("id", data.inventory_id)
       .maybeSingle();
     if (invError) throw new Error(invError.message);
     if (!inv) throw new Error("Переучёт не найден");
-    requireBartenderRestaurant(ctx, inv.restaurant_id);
+    requireOperationalInventoryAccess(ctx, inv);
     if (inv.status !== "draft" && inv.status !== "correction_required") {
       throw new Error("Закрытый переучёт нельзя редактировать");
+    }
+
+    const { data: product, error: productError } = await sb
+      .from("products")
+      .select("id,area,status")
+      .eq("id", data.product_id)
+      .maybeSingle();
+    if (productError) throw new Error(productError.message);
+    if (!product || (product.area ?? "bar") !== (inv.area ?? "bar")) {
+      throw new Error(
+        "\u0422\u043e\u0432\u0430\u0440 \u043d\u0435 \u043f\u0440\u0438\u043d\u0430\u0434\u043b\u0435\u0436\u0438\u0442 \u044d\u0442\u043e\u0439 \u0437\u043e\u043d\u0435",
+      );
     }
 
     const { data: currentItem, error: currentItemError } = await sb
@@ -871,7 +930,7 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "bartender");
+    requireOperationalRole(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -881,21 +940,21 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
       { data: approvedProducts, error: productsError },
       { data: existingItems, error: itemsError },
     ] = await Promise.all([
-      sb.from("inventories").select("id,restaurant_id,status").eq("id", data.id).maybeSingle(),
+      sb.from("inventories").select("id,restaurant_id,status,area").eq("id", data.id).maybeSingle(),
       sb
         .from("inventory_participants")
         .select("inventory_id,user_id")
         .eq("inventory_id", data.id)
         .eq("user_id", ctx.user.id)
         .maybeSingle(),
-      sb.from("products").select("id").eq("status", "approved"),
+      sb.from("products").select("id,area").eq("status", "approved"),
       sb.from("inventory_items").select("product_id").eq("inventory_id", data.id),
     ]);
     if (invError) throw new Error(invError.message);
     if (productsError) throw new Error(productsError.message);
     if (itemsError) throw new Error(itemsError.message);
     if (!inv) throw new Error("Переучёт не найден");
-    requireBartenderRestaurant(ctx, inv.restaurant_id);
+    requireOperationalInventoryAccess(ctx, inv);
     if (!participant && ctx.user.restaurant_id !== inv.restaurant_id) {
       throw new Error("Нет права закрыть этот переучёт");
     }
@@ -905,6 +964,7 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
 
     const existingProductIds = new Set((existingItems ?? []).map((item) => item.product_id));
     const missingRows = (approvedProducts ?? [])
+      .filter((product) => (product.area ?? "bar") === (inv.area ?? "bar"))
       .filter((product) => !existingProductIds.has(product.id))
       .map((product) => ({
         inventory_id: data.id,
@@ -965,7 +1025,12 @@ export const addDiscrepancyFn = createServerFn({ method: "POST" })
 
 export const listClosedInventoriesFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
-    sessionSchema.extend({ restaurant_id: z.string().uuid().nullable().optional() }).parse(input),
+    sessionSchema
+      .extend({
+        restaurant_id: z.string().uuid().nullable().optional(),
+        area: inventoryAreaSchema.nullable().optional(),
+      })
+      .parse(input),
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
@@ -975,11 +1040,12 @@ export const listClosedInventoriesFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     let query = sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by,correction_comment")
+      .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
       .in("status", ["completed", "correction_required"])
       .order("created_at", { ascending: false });
 
     if (data.restaurant_id) query = query.eq("restaurant_id", data.restaurant_id);
+    if (data.area) query = query.eq("area", data.area);
 
     const { data: invs, error } = await query;
     if (error) throw new Error(error.message);
@@ -1071,12 +1137,12 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
     ] = await Promise.all([
       sb
         .from("inventories")
-        .select("id,restaurant_id,status,created_at,created_by,correction_comment")
+        .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
         .eq("id", data.id)
         .maybeSingle(),
       sb.from("inventories").select("restaurants(id,name)").eq("id", data.id).maybeSingle(),
       sb.from("categories").select("id,name").order("name"),
-      sb.from("products").select("id,name,unit,category_id,status,unit_price").order("name"),
+      sb.from("products").select("id,name,unit,category_id,status,unit_price,area").order("name"),
       sb.from("inventory_items").select("product_id,quantity").eq("inventory_id", data.id),
       sb.from("expected_items").select("product_id,quantity").eq("inventory_id", data.id),
       sb.from("discrepancies").select("comment").eq("inventory_id", data.id).maybeSingle(),
@@ -1128,6 +1194,7 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
       .extend({
         month: z.string().regex(/^\d{4}-\d{2}$/),
         restaurant_id: z.string().uuid().nullable().optional(),
+        area: inventoryAreaSchema.nullable().optional(),
       })
       .parse(input),
   )
@@ -1144,12 +1211,13 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
 
     let inventoryQuery = sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by,correction_comment")
+      .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
       .in("status", ["completed", "correction_required"])
       .gte("created_at", start.toISOString())
       .lt("created_at", end.toISOString())
       .order("created_at", { ascending: true });
     if (data.restaurant_id) inventoryQuery = inventoryQuery.eq("restaurant_id", data.restaurant_id);
+    if (data.area) inventoryQuery = inventoryQuery.eq("area", data.area);
 
     const { data: inventories, error: inventoriesError } = await inventoryQuery;
     if (inventoriesError) throw new Error(inventoriesError.message);
@@ -1170,7 +1238,7 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
         ? sb.from("restaurants").select("id,name").in("id", restaurantIds)
         : Promise.resolve({ data: [], error: null }),
       sb.from("categories").select("id,name").order("name"),
-      sb.from("products").select("id,name,unit,category_id,status,unit_price").order("name"),
+      sb.from("products").select("id,name,unit,category_id,status,unit_price,area").order("name"),
       inventoryIds.length
         ? sb
             .from("inventory_items")
@@ -1261,11 +1329,11 @@ export const listExpectedFn = createServerFn({ method: "POST" })
       await Promise.all([
         sb
           .from("inventories")
-          .select("id,restaurant_id,status,created_at,created_by,correction_comment")
+          .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
           .eq("id", data.id)
           .maybeSingle(),
         sb.from("categories").select("id,name").order("name"),
-        sb.from("products").select("id,name,unit,category_id,status").order("name"),
+        sb.from("products").select("id,name,unit,category_id,status,area").order("name"),
         sb.from("expected_items").select("product_id,quantity").eq("inventory_id", data.id),
       ]);
     if (e1) throw new Error(e1.message);
@@ -1273,7 +1341,7 @@ export const listExpectedFn = createServerFn({ method: "POST" })
     return {
       inventory: inv,
       categories: cats ?? [],
-      products: prods ?? [],
+      products: (prods ?? []).filter((product) => (product.area ?? "bar") === (inv.area ?? "bar")),
       expected: expected ?? [],
     };
   });

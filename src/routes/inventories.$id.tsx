@@ -27,7 +27,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/inventories/$id")({
   head: () => ({ meta: [{ title: "Переучёт — BarStock" }] }),
   component: () => (
-    <AppShell allow={["bartender"]}>
+    <AppShell allow={["bartender", "kitchen_manager"]}>
       <InventoryDetail />
     </AppShell>
   ),
@@ -181,6 +181,9 @@ function InventoryDetail() {
           </h1>
           <p className="text-sm text-muted-foreground">
             Посчитано: {counted} из {products.length} позиций
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {"\u0417\u043e\u043d\u0430"}: {areaLabel(inventory.area)}
           </p>
           {canEdit && missingCount > 0 && (
             <p className="text-xs text-muted-foreground">
@@ -350,6 +353,10 @@ function InventoryDetail() {
       </Drawer>
     </div>
   );
+}
+
+function areaLabel(area?: string | null) {
+  return area === "kitchen" ? "\u041a\u0443\u0445\u043d\u044f" : "\u0411\u0430\u0440";
 }
 
 function inventoryStatusLabel(status: string) {

@@ -37,7 +37,16 @@ export const Route = createFileRoute("/admin")({
 });
 
 type Restaurant = { id: string; name: string };
-type Bartender = { id: string; name: string; login: string; restaurant_id: string | null };
+type StaffRole = "bartender" | "kitchen_manager" | "accountant";
+type ProductArea = "bar" | "kitchen";
+type Bartender = {
+  id: string;
+  name: string;
+  login: string;
+  role: StaffRole | string;
+  restaurant_id: string | null;
+  is_active?: boolean | null;
+};
 type Category = { id: string; name: string };
 type ProductUnit = "л" | "кг" | "шт" | "бут";
 type ProductStatus = "approved" | "pending" | "archived";
@@ -48,6 +57,7 @@ type Product = {
   unit: ProductUnit | string | null;
   status: ProductStatus | string | null;
   unit_price: number | string | null;
+  area?: ProductArea | string | null;
 };
 type ProductDraft = {
   name: string;
@@ -55,10 +65,23 @@ type ProductDraft = {
   unit: ProductUnit;
   status: ProductStatus;
   unit_price: string;
+  area: ProductArea;
 };
 
 const productUnits: ProductUnit[] = ["л", "кг", "шт", "бут"];
 const productStatuses: ProductStatus[] = ["approved", "pending", "archived"];
+const productAreas: ProductArea[] = ["bar", "kitchen"];
+const staffRoles: StaffRole[] = ["bartender", "kitchen_manager", "accountant"];
+
+function staffRoleLabel(role: string) {
+  if (role === "accountant") return "Бухгалтер";
+  if (role === "kitchen_manager") return "Заведующий производством";
+  return "Бармен";
+}
+
+function productAreaLabel(area?: string | null) {
+  return area === "kitchen" ? "Кухня" : "Бар";
+}
 
 function productStatusLabel(status: ProductStatus) {
   if (status === "approved") return "Активен";
@@ -102,6 +125,7 @@ function AdminPage() {
   const [bartenderName, setBartenderName] = useState("");
   const [bartenderLogin, setBartenderLogin] = useState("");
   const [bartenderPassword, setBartenderPassword] = useState("");
+  const [bartenderRole, setBartenderRole] = useState<StaffRole>("bartender");
   const [bartenderRestaurantId, setBartenderRestaurantId] = useState("");
   const [assignments, setAssignments] = useState<Record<string, string>>({});
   const [bartenderAssignmentMessage, setBartenderAssignmentMessage] = useState<string | null>(null);
@@ -117,6 +141,7 @@ function AdminPage() {
     unit: "бут",
     status: "approved",
     unit_price: "0",
+    area: "bar",
   });
 
   const restaurantsQuery = useQuery({
@@ -197,7 +222,8 @@ function AdminPage() {
           name: bartenderName.trim(),
           login: bartenderLogin.trim(),
           password: bartenderPassword,
-          restaurant_id: bartenderRestaurantId,
+          role: bartenderRole,
+          restaurant_id: bartenderRole === "accountant" ? null : bartenderRestaurantId,
           session_token: sessionToken!,
         },
       }),
@@ -205,6 +231,7 @@ function AdminPage() {
       setBartenderName("");
       setBartenderLogin("");
       setBartenderPassword("");
+      setBartenderRole("bartender");
       await refreshAdminData();
     },
   });
@@ -261,6 +288,7 @@ function AdminPage() {
         unit: "бут",
         status: "approved",
         unit_price: "0",
+        area: "bar",
       });
       await refreshAdminData();
     },
@@ -301,6 +329,7 @@ function AdminPage() {
           ? (product.status as ProductStatus)
           : "pending",
         unit_price: String(product.unit_price ?? 0),
+        area: product.area === "kitchen" ? "kitchen" : "bar",
       }
     );
   }
@@ -322,7 +351,7 @@ function AdminPage() {
       bartenderName.trim() &&
       bartenderLogin.trim() &&
       bartenderPassword &&
-      bartenderRestaurantId
+      (bartenderRole === "accountant" || bartenderRestaurantId)
     ) {
       createBartenderMutation.mutate();
     }
@@ -410,8 +439,8 @@ function AdminPage() {
       </section>
 
       <section className="rounded-xl border border-border bg-card p-4">
-        <SectionTitle icon={<UserPlus className="size-5 text-primary" />} title="Бармены" />
-        <form onSubmit={submitBartender} className="mb-5 grid gap-2 md:grid-cols-5">
+        <SectionTitle icon={<UserPlus className="size-5 text-primary" />} title="Сотрудники" />
+        <form onSubmit={submitBartender} className="mb-5 grid gap-2 md:grid-cols-6">
           <Input
             value={bartenderName}
             onChange={(event) => setBartenderName(event.target.value)}
@@ -428,6 +457,7 @@ function AdminPage() {
             placeholder="Пароль"
             type="password"
           />
+          <StaffRoleSelect value={bartenderRole} onChange={setBartenderRole} />
           <RestaurantSelect
             value={bartenderRestaurantId}
             restaurants={restaurants}
@@ -435,7 +465,10 @@ function AdminPage() {
           />
           <Button
             type="submit"
-            disabled={createBartenderMutation.isPending || restaurants.length === 0}
+            disabled={
+              createBartenderMutation.isPending ||
+              (bartenderRole !== "accountant" && restaurants.length === 0)
+            }
           >
             <UserPlus className="size-4" />
             {createBartenderMutation.isPending ? "Создание..." : "Создать бармена"}
@@ -456,7 +489,11 @@ function AdminPage() {
               <tr className="border-b border-border">
                 <th className="px-3 py-2 text-left font-medium">Имя</th>
                 <th className="px-3 py-2 text-left font-medium">Логин</th>
+                <th className="px-3 py-2 text-left font-medium">{"\u0420\u043e\u043b\u044c"}</th>
                 <th className="px-3 py-2 text-left font-medium">Ресторан</th>
+                <th className="px-3 py-2 text-left font-medium">
+                  {"\u0410\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c"}
+                </th>
                 <th className="px-3 py-2 text-left font-medium">Назначение</th>
                 <th className="px-3 py-2 text-left font-medium">Удаление</th>
               </tr>
@@ -469,10 +506,16 @@ function AdminPage() {
                   <tr key={bartender.id} className="border-b border-border last:border-b-0">
                     <td className="px-3 py-2 font-medium">{bartender.name}</td>
                     <td className="px-3 py-2">{bartender.login}</td>
+                    <td className="px-3 py-2">{staffRoleLabel(bartender.role)}</td>
                     <td className="px-3 py-2">
                       {bartender.restaurant_id
                         ? (restaurantById.get(bartender.restaurant_id) ?? "Не найден")
                         : "Не назначен"}
+                    </td>
+                    <td className="px-3 py-2">
+                      {bartender.is_active === false
+                        ? "\u041e\u0442\u043a\u043b\u044e\u0447\u0451\u043d"
+                        : "\u0410\u043a\u0442\u0438\u0432\u0435\u043d"}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex min-w-64 gap-2">
@@ -581,7 +624,7 @@ function AdminPage() {
 
       <section className="rounded-xl border border-border bg-card p-4">
         <SectionTitle icon={<Package className="size-5 text-primary" />} title="Товары" />
-        <form onSubmit={submitProduct} className="mb-4 grid gap-2 lg:grid-cols-6">
+        <form onSubmit={submitProduct} className="mb-4 grid gap-2 lg:grid-cols-7">
           <Input
             value={newProduct.name}
             onChange={(event) => setNewProduct((prev) => ({ ...prev, name: event.target.value }))}
@@ -599,6 +642,10 @@ function AdminPage() {
           <StatusSelect
             value={newProduct.status}
             onChange={(value) => setNewProduct((prev) => ({ ...prev, status: value }))}
+          />
+          <AreaSelect
+            value={newProduct.area}
+            onChange={(value) => setNewProduct((prev) => ({ ...prev, area: value }))}
           />
           <Input
             inputMode="decimal"
@@ -652,6 +699,7 @@ function AdminPage() {
                 <th className="px-3 py-2 text-left font-medium">Название</th>
                 <th className="px-3 py-2 text-left font-medium">Категория</th>
                 <th className="px-3 py-2 text-left font-medium">Ед.</th>
+                <th className="px-3 py-2 text-left font-medium">{"\u0417\u043e\u043d\u0430"}</th>
                 <th className="px-3 py-2 text-left font-medium">Цена, BYN</th>
                 <th className="px-3 py-2 text-left font-medium">Статус</th>
                 <th className="px-3 py-2 text-left font-medium">Действия</th>
@@ -682,6 +730,12 @@ function AdminPage() {
                       <UnitSelect
                         value={draft.unit}
                         onChange={(value) => setProductDraft(product.id, { unit: value })}
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <AreaSelect
+                        value={draft.area}
+                        onChange={(value) => setProductDraft(product.id, { area: value })}
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -822,6 +876,28 @@ function RestaurantSelect({
   );
 }
 
+function StaffRoleSelect({
+  value,
+  onChange,
+}: {
+  value: StaffRole;
+  onChange: (value: StaffRole) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value as StaffRole)}
+      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+    >
+      {staffRoles.map((role) => (
+        <option key={role} value={role}>
+          {staffRoleLabel(role)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function CategorySelect({
   value,
   categories,
@@ -841,6 +917,28 @@ function CategorySelect({
       {categories.map((category) => (
         <option key={category.id} value={category.id}>
           {category.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function AreaSelect({
+  value,
+  onChange,
+}: {
+  value: ProductArea;
+  onChange: (value: ProductArea) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value as ProductArea)}
+      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+    >
+      {productAreas.map((area) => (
+        <option key={area} value={area}>
+          {productAreaLabel(area)}
         </option>
       ))}
     </select>

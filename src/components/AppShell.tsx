@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { currentSessionFn } from "@/lib/barstock.functions";
 import { setSession, useSession } from "@/lib/session";
 
-export type AllowedRole = "bartender" | "accountant";
+export type AllowedRole = "bartender" | "accountant" | "kitchen_manager";
 
 export function AppShell({
   children,
@@ -62,6 +62,12 @@ export function AppShell({
 
   const isAccountant = session.user.role === "accountant";
   const homePath = isAccountant ? "/reports" : "/inventories";
+  const roleLabel =
+    session.user.role === "accountant"
+      ? "Бухгалтер"
+      : session.user.role === "kitchen_manager"
+        ? "Заведующий производством"
+        : "Бармен";
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -86,7 +92,7 @@ export function AppShell({
               </Link>
             )}
             <span className="text-muted-foreground">
-              {session.user.name} · {isAccountant ? "бухгалтер" : "бармен"}
+              {session.user.name} - {roleLabel}
             </span>
             <Button
               variant="ghost"

@@ -153,6 +153,7 @@ function ReportPage() {
           <Badge variant={isCorrectionRequired ? "default" : "secondary"}>
             {inventoryStatusLabel(inventory.status)}
           </Badge>
+          <Badge variant="outline">Зона: {areaLabel(inventory.area)}</Badge>
           {isCorrectionRequired && (
             <span className="text-sm text-muted-foreground">Предварительный отчёт</span>
           )}
@@ -389,4 +390,8 @@ function inventoryStatusLabel(status: string) {
   if (status === "completed") return "Закрыт";
   if (status === "correction_required") return "На доработке";
   return status;
+}
+
+function areaLabel(area?: string | null) {
+  return area === "kitchen" ? "Кухня" : "Бар";
 }

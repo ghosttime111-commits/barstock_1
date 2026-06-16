@@ -4,6 +4,7 @@ type ExportInventory = {
   id: string;
   created_at: string;
   status: string;
+  area?: string | null;
 };
 
 type ExportRestaurant = {
@@ -40,7 +41,7 @@ type CellStyle = NonNullable<XLSX.CellObject["s"]>;
 
 const titleRowIndex = 0;
 const metaStartRowIndex = 2;
-const tableHeaderRowIndex = 6;
+const tableHeaderRowIndex = 7;
 const tableColumnCount = 10;
 
 const thinBlackBorder = {
@@ -115,6 +116,10 @@ function translateDiscrepancyStatus(status: ExportRow["status"]) {
   if (status === "shortage") return "недостача";
   if (status === "surplus") return "излишек";
   return "совпадает";
+}
+
+function translateArea(area?: string | null) {
+  return area === "kitchen" ? "Кухня" : "Бар";
 }
 
 function getRowStyle(status: ExportRow["status"]) {
@@ -206,6 +211,7 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
     ["Ресторан:", restaurantName],
     ["Дата:", date.toLocaleString("ru-RU")],
     ["Статус:", translateInventoryStatus(report.inventory.status)],
+    ["\u0417\u043e\u043d\u0430:", translateArea(report.inventory.area)],
     [],
     tableHeaders,
     ...tableRows,
@@ -235,7 +241,7 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
 
   applyCellStyle(worksheet, titleRowIndex, 0, titleStyle);
 
-  for (let row = metaStartRowIndex; row < metaStartRowIndex + 3; row += 1) {
+  for (let row = metaStartRowIndex; row < metaStartRowIndex + 4; row += 1) {
     applyCellStyle(worksheet, row, 0, metaLabelStyle);
     applyCellStyle(worksheet, row, 1, metaValueStyle);
   }

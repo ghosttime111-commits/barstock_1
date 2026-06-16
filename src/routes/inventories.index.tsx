@@ -13,7 +13,7 @@ export const Route = createFileRoute("/inventories/")({
     meta: [{ title: "Переучёты — BarStock" }],
   }),
   component: () => (
-    <AppShell allow={["bartender"]}>
+    <AppShell allow={["bartender", "kitchen_manager"]}>
       <InventoriesPage />
     </AppShell>
   ),
@@ -28,7 +28,7 @@ function InventoriesPage() {
   const sessionToken = session?.session_token ?? null;
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["inventories", sessionToken],
+    queryKey: ["inventories", sessionToken, session?.user.role],
     queryFn: () => list({ data: { session_token: sessionToken! } }),
     enabled: !!sessionToken,
   });
@@ -98,7 +98,7 @@ function InventoriesPage() {
                   })}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {inv.created_by_name ?? "—"} · позиций: {inv.items_count}
+                  {inv.created_by_name ?? "-"} - {areaLabel(inv.area)} - позиций: {inv.items_count}
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -128,4 +128,8 @@ function inventoryStatusLabel(status: string) {
   if (status === "completed") return "Закрыт";
   if (status === "correction_required") return "На доработке";
   return status;
+}
+
+function areaLabel(area?: string | null) {
+  return area === "kitchen" ? "\u041a\u0443\u0445\u043d\u044f" : "\u0411\u0430\u0440";
 }

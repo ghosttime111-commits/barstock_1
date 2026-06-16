@@ -9,6 +9,7 @@ type ArchiveInventory = {
   id: string;
   created_at: string;
   status: string;
+  area?: string | null;
 };
 
 type ArchiveRestaurant = {
@@ -46,6 +47,10 @@ function translateStatus(status: ArchiveRow["status"]) {
   if (status === "shortage") return "недостача";
   if (status === "surplus") return "излишек";
   return "совпадает";
+}
+
+function translateArea(area?: string | null) {
+  return area === "kitchen" ? "Кухня" : "Бар";
 }
 
 function safeSheetName(name: string) {
@@ -108,6 +113,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
     [
       "Дата переучёта",
       "Ресторан",
+      "\u0417\u043e\u043d\u0430",
       "Количество позиций",
       "Количество расхождений",
       "Сумма недостач",
@@ -126,6 +132,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
       return [
         formatDate(report.inventory.created_at),
         report.restaurant?.name ?? "",
+        translateArea(report.inventory.area),
         report.rows.length,
         report.rows.filter((row) => row.status !== "match").length,
         shortageSum,
@@ -139,6 +146,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
   summarySheet["!cols"] = [
     { wch: 22 },
     { wch: 28 },
+    { wch: 12 },
     { wch: 18 },
     { wch: 22 },
     { wch: 16 },
@@ -152,6 +160,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
     const rows = [
       ["Ресторан:", restaurantName],
       ["Дата переучёта:", formatDate(report.inventory.created_at)],
+      ["\u0417\u043e\u043d\u0430:", translateArea(report.inventory.area)],
       ["Статус:", report.inventory.status],
       [],
       [

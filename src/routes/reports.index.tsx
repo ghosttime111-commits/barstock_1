@@ -30,8 +30,10 @@ function ReportsListPage() {
   const listRestaurants = useServerFn(listRestaurantsFn);
   const getMonthlyArchive = useServerFn(getMonthlyArchiveFn);
   const [restaurantId, setRestaurantId] = useState<string>("all");
+  const [area, setArea] = useState<string>("all");
   const [archiveMonth, setArchiveMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [archiveRestaurantId, setArchiveRestaurantId] = useState<string>("all");
+  const [archiveArea, setArchiveArea] = useState<string>("all");
   const sessionToken = session?.session_token ?? null;
 
   const { data: restaurants = [] } = useQuery({
@@ -41,11 +43,12 @@ function ReportsListPage() {
   });
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["reports", restaurantId],
+    queryKey: ["reports", restaurantId, area],
     queryFn: () =>
       list({
         data: {
           restaurant_id: restaurantId === "all" ? null : restaurantId,
+          area: area === "all" ? null : area,
           session_token: sessionToken!,
         },
       }),
@@ -58,6 +61,7 @@ function ReportsListPage() {
         data: {
           month: archiveMonth,
           restaurant_id: archiveRestaurantId === "all" ? null : archiveRestaurantId,
+          area: archiveArea === "all" ? null : archiveArea,
           session_token: sessionToken!,
         },
       }),
@@ -86,6 +90,7 @@ function ReportsListPage() {
             ))}
           </select>
         </label>
+        <AreaFilter value={area} onChange={setArea} />
       </div>
 
       <section className="rounded-xl border border-border bg-card p-4">
@@ -118,6 +123,7 @@ function ReportsListPage() {
               ))}
             </select>
           </label>
+          <AreaFilter value={archiveArea} onChange={setArchiveArea} />
           <Button
             type="button"
             disabled={!archiveMonth || archiveMutation.isPending}
@@ -165,8 +171,8 @@ function ReportsListPage() {
                   })}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {inv.restaurant_name ?? "Ресторан не указан"} · {inv.created_by_name ?? "—"} ·
-                  позиций: {inv.items_count}
+                  {inv.restaurant_name ?? "Ресторан не указан"} - {areaLabel(inv.area)} -{" "}
+                  {inv.created_by_name ?? "—"} · позиций: {inv.items_count}
                 </div>
               </div>
               <Badge variant={inv.status === "correction_required" ? "default" : "secondary"}>
@@ -185,4 +191,25 @@ function inventoryStatusLabel(status: string) {
   if (status === "completed") return "Закрыт";
   if (status === "correction_required") return "На доработке";
   return status;
+}
+
+function AreaFilter({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="grid gap-1 text-sm">
+      <span className="text-xs text-muted-foreground">{"\u0417\u043e\u043d\u0430"}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+      >
+        <option value="all">{"\u0412\u0441\u0435"}</option>
+        <option value="bar">{"\u0411\u0430\u0440"}</option>
+        <option value="kitchen">{"\u041a\u0443\u0445\u043d\u044f"}</option>
+      </select>
+    </label>
+  );
+}
+
+function areaLabel(area?: string | null) {
+  return area === "kitchen" ? "\u041a\u0443\u0445\u043d\u044f" : "\u0411\u0430\u0440";
 }

@@ -30,14 +30,14 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/admin")({
   head: () => ({ meta: [{ title: "Управление — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant"]}>
+    <AppShell allow={["accountant", "super_admin"]}>
       <AdminPage />
     </AppShell>
   ),
 });
 
 type Restaurant = { id: string; name: string };
-type StaffRole = "bartender" | "kitchen_manager" | "accountant" | "manager";
+type StaffRole = "bartender" | "kitchen_manager" | "accountant" | "manager" | "super_admin";
 type ProductArea = "bar" | "kitchen";
 type Bartender = {
   id: string;
@@ -71,9 +71,17 @@ type ProductDraft = {
 const productUnits: ProductUnit[] = ["л", "кг", "шт", "бут"];
 const productStatuses: ProductStatus[] = ["approved", "pending", "archived"];
 const productAreas: ProductArea[] = ["bar", "kitchen"];
-const staffRoles: StaffRole[] = ["bartender", "kitchen_manager", "manager", "accountant"];
+const accountantStaffRoles: StaffRole[] = ["bartender", "kitchen_manager", "manager"];
+const superAdminStaffRoles: StaffRole[] = [
+  "bartender",
+  "kitchen_manager",
+  "manager",
+  "accountant",
+  "super_admin",
+];
 
 function staffRoleLabel(role: string) {
+  if (role === "super_admin") return "Администратор системы";
   if (role === "accountant") return "Бухгалтер";
   if (role === "manager") return "Управляющий";
   if (role === "kitchen_manager") return "Заведующий производством";
@@ -103,6 +111,8 @@ function parseMoneyInput(value: string) {
 function AdminPage() {
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
+  const isSuperAdmin = session?.user.role === "super_admin";
+  const availableStaffRoles = isSuperAdmin ? superAdminStaffRoles : accountantStaffRoles;
   const queryClient = useQueryClient();
 
   const listRestaurants = useServerFn(listRestaurantsFn);
@@ -241,7 +251,7 @@ function AdminPage() {
           password: bartenderPassword,
           role: bartenderRole,
           restaurant_id:
-            bartenderRole === "accountant"
+            bartenderRole === "accountant" || bartenderRole === "super_admin"
               ? null
               : bartenderRole === "manager"
                 ? bartenderRestaurantId || null
@@ -379,7 +389,7 @@ function AdminPage() {
       bartenderName.trim() &&
       bartenderLogin.trim() &&
       bartenderPassword &&
-      (bartenderRole === "accountant" || bartenderRole === "manager" || bartenderRestaurantId)
+      (["accountant", "manager", "super_admin"].includes(bartenderRole) || bartenderRestaurantId)
     ) {
       createBartenderMutation.mutate();
     }
@@ -486,12 +496,17 @@ function AdminPage() {
             placeholder="Пароль"
             type="password"
           />
-          <StaffRoleSelect value={bartenderRole} onChange={setBartenderRole} />
+          <StaffRoleSelect
+            value={bartenderRole}
+            roles={availableStaffRoles}
+            onChange={setBartenderRole}
+          />
           <RestaurantSelect
             value={bartenderRestaurantId}
             restaurants={restaurants}
             onChange={setBartenderRestaurantId}
             allowAll={bartenderRole === "manager"}
+            disabled={bartenderRole === "accountant" || bartenderRole === "super_admin"}
           />
           <Button
             type="submit"
@@ -536,6 +551,12 @@ function AdminPage() {
               {bartenders.map((bartender) => {
                 const selectedRestaurantId =
                   assignments[bartender.id] ?? bartender.restaurant_id ?? "";
+                const canAssignRestaurant = ["bartender", "kitchen_manager", "manager"].includes(
+                  bartender.role,
+                );
+                const canDeleteStaff = isSuperAdmin
+                  ? bartender.id !== session?.user.id
+                  : ["bartender", "kitchen_manager"].includes(bartender.role);
                 return (
                   <tr key={bartender.id} className="border-b border-border last:border-b-0">
                     <td className="px-3 py-2 font-medium">{bartender.name}</td>
@@ -544,7 +565,7 @@ function AdminPage() {
                     <td className="px-3 py-2">
                       {bartender.restaurant_id
                         ? (restaurantById.get(bartender.restaurant_id) ?? "Не найден")
-                        : bartender.role === "manager"
+                        : ["manager", "accountant", "super_admin"].includes(bartender.role)
                           ? "Все рестораны"
                           : "Не назначен"}
                     </td>
@@ -554,46 +575,54 @@ function AdminPage() {
                         : "\u0410\u043a\u0442\u0438\u0432\u0435\u043d"}
                     </td>
                     <td className="px-3 py-2">
-                      <div className="flex min-w-64 gap-2">
-                        <RestaurantSelect
-                          value={selectedRestaurantId}
-                          restaurants={restaurants}
-                          allowAll={bartender.role === "manager"}
-                          onChange={(value) =>
-                            setAssignments((prev) => ({ ...prev, [bartender.id]: value }))
-                          }
-                        />
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={
-                            (!selectedRestaurantId && bartender.role !== "manager") ||
-                            selectedRestaurantId === (bartender.restaurant_id ?? "") ||
-                            updateBartenderMutation.isPending
-                          }
-                          onClick={() =>
-                            updateBartenderMutation.mutate({
-                              id: bartender.id,
-                              restaurantId: selectedRestaurantId || null,
-                            })
-                          }
-                        >
-                          <Save className="size-4" />
-                          Сохранить
-                        </Button>
-                      </div>
+                      {canAssignRestaurant ? (
+                        <div className="flex min-w-64 gap-2">
+                          <RestaurantSelect
+                            value={selectedRestaurantId}
+                            restaurants={restaurants}
+                            allowAll={bartender.role === "manager"}
+                            onChange={(value) =>
+                              setAssignments((prev) => ({ ...prev, [bartender.id]: value }))
+                            }
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={
+                              (!selectedRestaurantId && bartender.role !== "manager") ||
+                              selectedRestaurantId === (bartender.restaurant_id ?? "") ||
+                              updateBartenderMutation.isPending
+                            }
+                            onClick={() =>
+                              updateBartenderMutation.mutate({
+                                id: bartender.id,
+                                restaurantId: selectedRestaurantId || null,
+                              })
+                            }
+                          >
+                            <Save className="size-4" />
+                            Сохранить
+                          </Button>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-2">
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        disabled={deleteBartenderMutation.isPending}
-                        onClick={() => confirmDeleteBartender(bartender.id, bartender.name)}
-                      >
-                        <Trash2 className="size-4" />
-                        Удалить
-                      </Button>
+                      {canDeleteStaff ? (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          disabled={deleteBartenderMutation.isPending}
+                          onClick={() => confirmDeleteBartender(bartender.id, bartender.name)}
+                        >
+                          <Trash2 className="size-4" />
+                          Удалить
+                        </Button>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -935,15 +964,18 @@ function RestaurantSelect({
   restaurants,
   onChange,
   allowAll = false,
+  disabled = false,
 }: {
   value: string;
   restaurants: Restaurant[];
   onChange: (value: string) => void;
   allowAll?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <select
       value={value}
+      disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
       className="h-9 rounded-md border border-input bg-background px-3 text-sm"
     >
@@ -959,9 +991,11 @@ function RestaurantSelect({
 
 function StaffRoleSelect({
   value,
+  roles,
   onChange,
 }: {
   value: StaffRole;
+  roles: StaffRole[];
   onChange: (value: StaffRole) => void;
 }) {
   return (
@@ -970,7 +1004,7 @@ function StaffRoleSelect({
       onChange={(event) => onChange(event.target.value as StaffRole)}
       className="h-9 rounded-md border border-input bg-background px-3 text-sm"
     >
-      {staffRoles.map((role) => (
+      {roles.map((role) => (
         <option key={role} value={role}>
           {staffRoleLabel(role)}
         </option>

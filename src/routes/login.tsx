@@ -15,6 +15,13 @@ export const Route = createFileRoute("/login")({
   component: LoginPage,
 });
 
+function homeForRole(role: string) {
+  if (role === "super_admin") return "/admin" as const;
+  if (role === "accountant") return "/reports" as const;
+  if (role === "manager") return "/manager" as const;
+  return "/inventories" as const;
+}
+
 function LoginPage() {
   const navigate = useNavigate();
   const { session, ready } = useSession();
@@ -26,8 +33,7 @@ function LoginPage() {
 
   useEffect(() => {
     if (ready && session) {
-      const home = session.user.role === "accountant" ? "/reports" : "/inventories";
-      navigate({ to: home, replace: true });
+      navigate({ to: homeForRole(session.user.role), replace: true });
     }
   }, [ready, session, navigate]);
 
@@ -38,8 +44,7 @@ function LoginPage() {
     try {
       const res = await login({ data: { login: loginValue.trim(), password } });
       setSession(res);
-      const home = res.user.role === "accountant" ? "/reports" : "/inventories";
-      navigate({ to: home, replace: true });
+      navigate({ to: homeForRole(res.user.role), replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка входа");
     } finally {

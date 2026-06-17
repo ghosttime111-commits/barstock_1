@@ -16,7 +16,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/reports/expected/$id")({
   head: () => ({ meta: [{ title: "Учётные остатки — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant"]}>
+    <AppShell allow={["accountant", "super_admin"]}>
       <ExpectedPage />
     </AppShell>
   ),

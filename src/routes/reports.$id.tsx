@@ -29,7 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 export const Route = createFileRoute("/reports/$id")({
   head: () => ({ meta: [{ title: "Отчёт по переучёту — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant", "manager"]}>
+    <AppShell allow={["accountant", "manager", "super_admin"]}>
       <ReportPage />
     </AppShell>
   ),
@@ -41,7 +41,7 @@ function ReportPage() {
   const { id } = Route.useParams();
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
-  const isAccountant = session?.user.role === "accountant";
+  const isAccountant = session?.user.role === "accountant" || session?.user.role === "super_admin";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const getReport = useServerFn(getInventoryReportFn);

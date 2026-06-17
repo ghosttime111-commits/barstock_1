@@ -1,15 +1,21 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, LogOut, ReceiptText, Wine } from "lucide-react";
+import { BarChart3, ClipboardList, LogOut, ReceiptText, Wine } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { currentSessionFn } from "@/lib/barstock.functions";
 import { setSession, useSession } from "@/lib/session";
 
-export type AllowedRole = "bartender" | "accountant" | "kitchen_manager" | "manager";
+export type AllowedRole =
+  | "bartender"
+  | "accountant"
+  | "kitchen_manager"
+  | "manager"
+  | "super_admin";
 
 function homePathForRole(role: string) {
+  if (role === "super_admin") return "/admin" as const;
   if (role === "accountant") return "/reports" as const;
   if (role === "manager") return "/manager" as const;
   return "/inventories" as const;
@@ -65,20 +71,22 @@ export function AppShell({
     );
   }
 
-  const isAccountant = session.user.role === "accountant";
-  const canViewStats = isAccountant || session.user.role === "manager";
-  const canViewWriteOffs = ["bartender", "kitchen_manager", "accountant"].includes(
+  const isAccountingRole = ["accountant", "super_admin"].includes(session.user.role);
+  const canViewStats = isAccountingRole || session.user.role === "manager";
+  const canViewWriteOffs = ["bartender", "kitchen_manager", "accountant", "super_admin"].includes(
     session.user.role,
   );
   const homePath = homePathForRole(session.user.role);
   const roleLabel =
-    session.user.role === "accountant"
-      ? "Бухгалтер"
-      : session.user.role === "manager"
-        ? "Управляющий"
-        : session.user.role === "kitchen_manager"
-          ? "Заведующий производством"
-          : "Бармен";
+    session.user.role === "super_admin"
+      ? "Администратор системы"
+      : session.user.role === "accountant"
+        ? "Бухгалтер"
+        : session.user.role === "manager"
+          ? "Управляющий"
+          : session.user.role === "kitchen_manager"
+            ? "Заведующий производством"
+            : "Бармен";
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -94,6 +102,14 @@ export function AppShell({
             )}
           </Link>
           <div className="flex items-center gap-3 text-sm">
+            {isAccountingRole && (
+              <Link
+                to="/reports"
+                className="inline-flex items-center gap-1 font-medium text-muted-foreground transition hover:text-foreground"
+              >
+                <ClipboardList className="size-4" /> Отчёты
+              </Link>
+            )}
             {canViewWriteOffs && (
               <Link
                 to="/write-offs"
@@ -110,7 +126,7 @@ export function AppShell({
                 <BarChart3 className="size-4" /> Статистика
               </Link>
             )}
-            {isAccountant && (
+            {isAccountingRole && (
               <Link
                 to="/admin"
                 className="font-medium text-muted-foreground transition hover:text-foreground"

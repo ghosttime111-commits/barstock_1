@@ -19,7 +19,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/write-offs")({
   head: () => ({ meta: [{ title: "Списания — BarStock" }] }),
   component: () => (
-    <AppShell allow={["bartender", "kitchen_manager", "accountant"]}>
+    <AppShell allow={["bartender", "kitchen_manager", "accountant", "super_admin"]}>
       <WriteOffsPage />
     </AppShell>
   ),
@@ -33,7 +33,7 @@ function WriteOffsPage() {
   const { session } = useSession();
   const listWriteOffs = useServerFn(listWriteOffsFn);
   const sessionToken = session?.session_token ?? null;
-  const isAccountant = session?.user.role === "accountant";
+  const isAccountant = session?.user.role === "accountant" || session?.user.role === "super_admin";
   const [month, setMonth] = useState(currentMonth());
   const [restaurantId, setRestaurantId] = useState("all");
   const [area, setArea] = useState("all");

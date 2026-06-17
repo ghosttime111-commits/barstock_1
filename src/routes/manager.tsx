@@ -23,7 +23,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/manager")({
   head: () => ({ meta: [{ title: "Статистика — BarStock" }] }),
   component: () => (
-    <AppShell allow={["manager", "accountant"]}>
+    <AppShell allow={["manager", "accountant", "super_admin"]}>
       <ManagerPage />
     </AppShell>
   ),

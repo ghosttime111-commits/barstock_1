@@ -8,7 +8,13 @@ const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const PASSWORD_ITERATIONS = 210_000;
 const productUnitSchema = z.enum(["л", "кг", "шт", "бут"]);
 const productStatusSchema = z.enum(["approved", "pending", "archived"]);
-const staffRoleSchema = z.enum(["bartender", "kitchen_manager", "accountant", "manager"]);
+const staffRoleSchema = z.enum([
+  "bartender",
+  "kitchen_manager",
+  "accountant",
+  "manager",
+  "super_admin",
+]);
 const inventoryAreaSchema = z.enum(["bar", "kitchen"]);
 const moneySchema = z.number().min(0).max(1_000_000);
 const inventoryEntryTypeSchema = z.enum(["add", "set"]);
@@ -167,6 +173,10 @@ function requireRole(ctx: AuthContext, role: StaffRole | StaffRole[]) {
   }
 }
 
+function requireAccountingAccess(ctx: AuthContext) {
+  requireRole(ctx, ["accountant", "super_admin"]);
+}
+
 function roleArea(role: OperationalRole): InventoryArea {
   return role === "kitchen_manager" ? "kitchen" : "bar";
 }
@@ -252,7 +262,7 @@ export const listRestaurantsFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const { data: rows, error } = await getBarstock()
@@ -269,7 +279,7 @@ export const createRestaurantFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const { data: restaurant, error } = await getBarstock()
@@ -285,15 +295,18 @@ export const listBartendersFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
-    const { data: rows, error } = await getBarstock()
+    let query = getBarstock()
       .from("users")
       .select("id,name,login,role,restaurant_id,is_active")
-      .in("role", ["bartender", "kitchen_manager", "accountant", "manager"])
-      .neq("is_active", false)
+      .in("role", ["bartender", "kitchen_manager", "accountant", "manager", "super_admin"])
       .order("name");
+    if (ctx.user.role !== "super_admin") {
+      query = query.neq("role", "super_admin").neq("is_active", false);
+    }
+    const { data: rows, error } = await query;
     if (error) throw new Error(error.message);
     return rows ?? [];
   });
@@ -312,11 +325,14 @@ export const createBartenderFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
     const role = data.role;
+    if (role === "super_admin" && ctx.user.role !== "super_admin") {
+      throw new Error("Только администратор системы может назначить эту роль");
+    }
     const restaurantId = data.restaurant_id ?? null;
     if ((role === "bartender" || role === "kitchen_manager") && !restaurantId) {
       throw new Error("Restaurant is required for this role");
@@ -338,7 +354,7 @@ export const createBartenderFn = createServerFn({ method: "POST" })
         login: data.login,
         password_hash: hashPassword(data.password),
         role,
-        restaurant_id: role === "accountant" ? null : restaurantId,
+        restaurant_id: role === "accountant" || role === "super_admin" ? null : restaurantId,
         is_active: true,
       })
       .select("id,name,login,role,restaurant_id,is_active")
@@ -351,7 +367,7 @@ export const deleteBartenderFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
     if (ctx.user.id === data.id) {
       throw new Error("Нельзя удалить текущего пользователя");
     }
@@ -364,33 +380,39 @@ export const deleteBartenderFn = createServerFn({ method: "POST" })
       .eq("id", data.id)
       .maybeSingle();
     if (bartenderError) throw new Error(bartenderError.message);
-    if (!bartender || !["bartender", "kitchen_manager", "manager"].includes(bartender.role))
+    if (!bartender || !staffRoleSchema.safeParse(bartender.role).success) {
       throw new Error("Staff member not found");
+    }
+    if (bartender.role === "super_admin" && ctx.user.role !== "super_admin") {
+      throw new Error("Только администратор системы может удалить другого администратора");
+    }
+    if (ctx.user.role === "accountant" && ["manager", "accountant"].includes(bartender.role)) {
+      throw new Error("Бухгалтер не может удалить этого пользователя");
+    }
 
     const [
       { count: createdCount, error: createdError },
       { count: participantCount, error: participantError },
+      { count: writeOffCount, error: writeOffError },
     ] = await Promise.all([
       sb.from("inventories").select("id", { count: "exact", head: true }).eq("created_by", data.id),
       sb
         .from("inventory_participants")
         .select("inventory_id", { count: "exact", head: true })
         .eq("user_id", data.id),
+      sb.from("write_offs").select("id", { count: "exact", head: true }).eq("user_id", data.id),
     ]);
     if (createdError) throw new Error(createdError.message);
     if (participantError) throw new Error(participantError.message);
+    if (writeOffError) throw new Error(writeOffError.message);
 
-    if ((createdCount ?? 0) > 0 || (participantCount ?? 0) > 0) {
+    if ((createdCount ?? 0) > 0 || (participantCount ?? 0) > 0 || (writeOffCount ?? 0) > 0) {
       const { error } = await sb.from("users").update({ is_active: false }).eq("id", data.id);
       if (error) throw new Error(error.message);
       return { ok: true, mode: "soft" };
     }
 
-    const { error } = await sb
-      .from("users")
-      .delete()
-      .eq("id", data.id)
-      .in("role", ["bartender", "kitchen_manager", "manager"]);
+    const { error } = await sb.from("users").delete().eq("id", data.id);
     if (error) throw new Error(error.message);
     return { ok: true, mode: "hard" };
   });
@@ -403,7 +425,7 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -446,7 +468,7 @@ export const deleteRestaurantFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -480,7 +502,7 @@ export const listCategoriesFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const { data: rows, error } = await getBarstock()
@@ -499,7 +521,7 @@ export const createCategoryFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const { data: category, error } = await getBarstock()
@@ -523,7 +545,7 @@ export const updateCategoryFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -551,7 +573,7 @@ export const deleteCategoryFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -573,7 +595,7 @@ export const listProductsFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const { data: rows, error } = await getBarstock()
@@ -599,7 +621,7 @@ export const createProductFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -646,7 +668,7 @@ export const updateProductFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -682,7 +704,7 @@ export const archiveProductFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const { data: product, error } = await getBarstock()
@@ -699,7 +721,7 @@ export const deleteProductFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -1073,7 +1095,7 @@ export const addDiscrepancyFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const { error } = await getBarstock().from("discrepancies").upsert(
@@ -1099,7 +1121,7 @@ export const listClosedInventoriesFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -1121,7 +1143,7 @@ export const deleteInventoryFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -1156,7 +1178,7 @@ export const requestInventoryCorrectionFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -1186,7 +1208,7 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["accountant", "manager"]);
+    requireRole(ctx, ["accountant", "manager", "super_admin"]);
 
     const { getBarstock } = await import("./barstock.server");
     const { classifyDiscrepancy } = await import("./expectedStock");
@@ -1272,7 +1294,7 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const { classifyDiscrepancy } = await import("./expectedStock");
@@ -1442,11 +1464,11 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
   .inputValidator((input) => writeOffFiltersSchema.parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["bartender", "kitchen_manager", "accountant"]);
+    requireRole(ctx, ["bartender", "kitchen_manager", "accountant", "super_admin"]);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
-    const isAccountant = ctx.user.role === "accountant";
+    const isAccountant = ctx.user.role === "accountant" || ctx.user.role === "super_admin";
     let query = sb
       .from("write_offs")
       .select("id,restaurant_id,area,product_id,user_id,quantity,reason,created_at")
@@ -1558,7 +1580,7 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["manager", "accountant"]);
+    requireRole(ctx, ["manager", "accountant", "super_admin"]);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -1876,7 +1898,7 @@ export const listExpectedFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -1915,7 +1937,7 @@ export const upsertExpectedFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -1952,7 +1974,7 @@ export const bulkSetExpectedFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();

@@ -18,7 +18,7 @@ import { useState } from "react";
 export const Route = createFileRoute("/reports/")({
   head: () => ({ meta: [{ title: "Отчёты — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant"]}>
+    <AppShell allow={["accountant", "super_admin"]}>
       <ReportsListPage />
     </AppShell>
   ),

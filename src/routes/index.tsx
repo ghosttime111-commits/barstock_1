@@ -25,11 +25,13 @@ function Index() {
       return;
     }
     const home =
-      session.user.role === "accountant"
-        ? "/reports"
-        : session.user.role === "manager"
-          ? "/manager"
-          : "/inventories";
+      session.user.role === "super_admin"
+        ? "/admin"
+        : session.user.role === "accountant"
+          ? "/reports"
+          : session.user.role === "manager"
+            ? "/manager"
+            : "/inventories";
     navigate({ to: home, replace: true });
   }, [ready, session, navigate]);
   return (

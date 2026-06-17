@@ -1582,9 +1582,10 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
 
     let writeOffQuery = sb
       .from("write_offs")
-      .select("product_id,quantity")
+      .select("id,restaurant_id,area,product_id,user_id,quantity,reason,created_at")
       .gte("created_at", start.toISOString())
-      .lt("created_at", end.toISOString());
+      .lt("created_at", end.toISOString())
+      .order("created_at", { ascending: false });
     if (effectiveRestaurantId) {
       writeOffQuery = writeOffQuery.eq("restaurant_id", effectiveRestaurantId);
     }
@@ -1633,9 +1634,17 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
       ]),
     );
     const userIds = Array.from(
-      new Set(invs.map((inventory) => inventory.created_by).filter(Boolean) as string[]),
+      new Set([
+        ...(invs.map((inventory) => inventory.created_by).filter(Boolean) as string[]),
+        ...(writeOffs ?? []).map((row) => row.user_id),
+      ]),
     );
-    const restaurantIds = Array.from(new Set(invs.map((inventory) => inventory.restaurant_id)));
+    const restaurantIds = Array.from(
+      new Set([
+        ...invs.map((inventory) => inventory.restaurant_id),
+        ...(writeOffs ?? []).map((row) => row.restaurant_id),
+      ]),
+    );
     const [productsResult, usersResult, usedRestaurantsResult] = await Promise.all([
       productIds.length
         ? sb.from("products").select("id,name,unit_price").in("id", productIds)
@@ -1658,10 +1667,6 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
     );
     const actualByInventory = new Map<string, Map<string, number>>();
     const expectedByInventory = new Map<string, Map<string, number>>();
-    const writeOffAmount = (writeOffs ?? []).reduce((sum, row) => {
-      const product = productById.get(row.product_id);
-      return sum + Number(row.quantity ?? 0) * Number(product?.unit_price ?? 0);
-    }, 0);
 
     for (const item of items ?? []) {
       const map = actualByInventory.get(item.inventory_id) ?? new Map<string, number>();
@@ -1688,6 +1693,16 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
       restaurant_id: string;
       restaurant_name: string;
       inventories: number;
+      write_offs: number;
+    };
+    type WriteOffProductTotals = {
+      product_id: string;
+      product_name: string;
+      restaurant_id: string;
+      restaurant_name: string;
+      area: InventoryArea;
+      count: number;
+      amount: number;
     };
 
     const totals: MoneyTotals = { shortage: 0, surplus: 0, problemPositions: 0 };
@@ -1702,6 +1717,7 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
         shortage: 0,
         surplus: 0,
         problemPositions: 0,
+        write_offs: 0,
       };
       restaurant.inventories += 1;
 
@@ -1771,6 +1787,60 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
       };
     });
 
+    const writeOffProducts = new Map<string, WriteOffProductTotals>();
+    const recentWriteOffs = (writeOffs ?? []).map((writeOff) => {
+      const product = productById.get(writeOff.product_id);
+      const restaurantName = restaurantById.get(writeOff.restaurant_id) ?? "Без названия";
+      const quantity = Number(writeOff.quantity ?? 0);
+      const amount = quantity * Number(product?.unit_price ?? 0);
+      const area = (writeOff.area ?? "bar") as InventoryArea;
+      const restaurant = restaurants.get(writeOff.restaurant_id) ?? {
+        restaurant_id: writeOff.restaurant_id,
+        restaurant_name: restaurantName,
+        inventories: 0,
+        shortage: 0,
+        surplus: 0,
+        problemPositions: 0,
+        write_offs: 0,
+      };
+      restaurant.write_offs += amount;
+      restaurants.set(writeOff.restaurant_id, restaurant);
+
+      const key = `${writeOff.product_id}:${writeOff.restaurant_id}:${area}`;
+      const productTotals = writeOffProducts.get(key) ?? {
+        product_id: writeOff.product_id,
+        product_name: product?.name ?? "Неизвестный товар",
+        restaurant_id: writeOff.restaurant_id,
+        restaurant_name: restaurantName,
+        area,
+        count: 0,
+        amount: 0,
+      };
+      productTotals.count += 1;
+      productTotals.amount += amount;
+      writeOffProducts.set(key, productTotals);
+
+      return {
+        id: writeOff.id,
+        created_at: writeOff.created_at,
+        restaurant_id: writeOff.restaurant_id,
+        restaurant_name: restaurantName,
+        area,
+        product_id: writeOff.product_id,
+        product_name: product?.name ?? "Неизвестный товар",
+        quantity,
+        amount,
+        user_name: userById.get(writeOff.user_id) ?? "Неизвестный пользователь",
+        reason: writeOff.reason,
+      };
+    });
+    const writeOffsTotal = recentWriteOffs.reduce((sum, row) => sum + row.amount, 0);
+    const writeOffsByRestaurant = Array.from(restaurants.values()).map((restaurant) => ({
+      restaurant_id: restaurant.restaurant_id,
+      restaurant_name: restaurant.restaurant_name,
+      amount: restaurant.write_offs,
+    }));
+
     return {
       month: data.month,
       scope_restaurant_id: fixedRestaurantId,
@@ -1779,17 +1849,23 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
         inventories: invs.length,
         shortage: totals.shortage,
         surplus: totals.surplus,
-        net: totals.surplus - totals.shortage,
+        net: totals.surplus - totals.shortage - writeOffsTotal,
         problem_positions: totals.problemPositions,
-        write_offs_amount: writeOffAmount,
+        write_offs_amount: writeOffsTotal,
       },
+      writeOffsTotal,
+      writeOffsByRestaurant,
+      topWriteOffProducts: Array.from(writeOffProducts.values())
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 20),
+      recentWriteOffs: recentWriteOffs.slice(0, 10),
       top_products: Array.from(products.values())
         .sort((a, b) => b.shortage + b.surplus - (a.shortage + a.surplus))
         .slice(0, 20),
       restaurant_stats: Array.from(restaurants.values())
         .map((restaurant) => ({
           ...restaurant,
-          net: restaurant.surplus - restaurant.shortage,
+          net: restaurant.surplus - restaurant.shortage - restaurant.write_offs,
         }))
         .sort((a, b) => b.shortage + b.surplus - (a.shortage + a.surplus)),
       latest_inventories: latest.slice(0, 10),

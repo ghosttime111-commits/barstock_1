@@ -16,6 +16,7 @@ import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/formatMoney";
+import { formatQuantity } from "@/lib/formatQuantity";
 import { getManagerStatsFn } from "@/lib/barstock.functions";
 import { useSession } from "@/lib/session";
 
@@ -182,7 +183,7 @@ function ManagerPage() {
             <MetricCard
               icon={<ReceiptText className="size-4" />}
               label="Списания"
-              value={`${formatMoney(data.summary.write_offs_amount)} BYN`}
+              value={`${formatMoney(data.writeOffsTotal)} BYN`}
               tone="warning"
             />
           </div>
@@ -211,16 +212,67 @@ function ManagerPage() {
             />
           </StatsSection>
 
+          <StatsSection title="Топ списываемых товаров">
+            <DataTable
+              headers={["Товар", "Ресторан", "Зона", "Количество списаний", "Сумма списаний, BYN"]}
+              empty="Списаний за выбранный период нет."
+              rows={data.topWriteOffProducts.map((row) => [
+                row.product_name,
+                row.restaurant_name,
+                areaLabel(row.area),
+                row.count,
+                formatMoney(row.amount),
+              ])}
+            />
+          </StatsSection>
+
           <StatsSection title="Статистика по ресторанам">
             <DataTable
-              headers={["Ресторан", "Переучётов", "Недостачи, BYN", "Излишки, BYN", "Итог, BYN"]}
-              empty="Нет закрытых переучётов за выбранный период."
+              headers={[
+                "Ресторан",
+                "Переучётов",
+                "Недостачи, BYN",
+                "Излишки, BYN",
+                "Списания, BYN",
+                "Итог, BYN",
+              ]}
+              empty="Нет переучётов и списаний за выбранный период."
               rows={data.restaurant_stats.map((row) => [
                 row.restaurant_name,
                 row.inventories,
                 formatMoney(row.shortage),
                 formatMoney(row.surplus),
+                formatMoney(row.write_offs),
                 formatMoney(row.net),
+              ])}
+            />
+          </StatsSection>
+
+          <StatsSection title="Последние списания">
+            <DataTable
+              headers={[
+                "Дата",
+                "Ресторан",
+                "Зона",
+                "Товар",
+                "Количество",
+                "Сумма, BYN",
+                "Сотрудник",
+                "Причина",
+              ]}
+              empty="Списаний за выбранный период нет."
+              rows={data.recentWriteOffs.map((row) => [
+                new Date(row.created_at).toLocaleString("ru-RU", {
+                  dateStyle: "short",
+                  timeStyle: "short",
+                }),
+                row.restaurant_name,
+                areaLabel(row.area),
+                row.product_name,
+                formatQuantity(row.quantity),
+                formatMoney(row.amount),
+                row.user_name,
+                row.reason,
               ])}
             />
           </StatsSection>

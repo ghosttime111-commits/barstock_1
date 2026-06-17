@@ -47,7 +47,7 @@ type Bartender = {
   restaurant_id: string | null;
   is_active?: boolean | null;
 };
-type Category = { id: string; name: string };
+type Category = { id: string; name: string; area?: ProductArea | string | null };
 type ProductUnit = "л" | "кг" | "шт" | "бут";
 type ProductStatus = "approved" | "pending" | "archived";
 type Product = {
@@ -129,8 +129,12 @@ function AdminPage() {
   const [bartenderRestaurantId, setBartenderRestaurantId] = useState("");
   const [assignments, setAssignments] = useState<Record<string, string>>({});
   const [bartenderAssignmentMessage, setBartenderAssignmentMessage] = useState<string | null>(null);
+  const [staffActionMessage, setStaffActionMessage] = useState<string | null>(null);
   const [categoryName, setCategoryName] = useState("");
+  const [categoryArea, setCategoryArea] = useState<ProductArea>("bar");
   const [categoryNames, setCategoryNames] = useState<Record<string, string>>({});
+  const [categoryAreas, setCategoryAreas] = useState<Record<string, ProductArea>>({});
+  const [categoryAreaFilter, setCategoryAreaFilter] = useState<"all" | ProductArea>("all");
   const [productSearch, setProductSearch] = useState("");
   const [productCategoryFilter, setProductCategoryFilter] = useState("all");
   const [productDeleteMessage, setProductDeleteMessage] = useState<string | null>(null);
@@ -186,6 +190,18 @@ function AdminPage() {
     () => new Map(categories.map((category) => [category.id, category.name])),
     [categories],
   );
+  const filteredCategories = useMemo(
+    () =>
+      categories.filter(
+        (category) =>
+          categoryAreaFilter === "all" || (category.area ?? "bar") === categoryAreaFilter,
+      ),
+    [categories, categoryAreaFilter],
+  );
+  const newProductCategories = useMemo(
+    () => categories.filter((category) => (category.area ?? "bar") === newProduct.area),
+    [categories, newProduct.area],
+  );
   const filteredProducts = useMemo(() => {
     const search = productSearch.trim().toLowerCase();
     return products.filter((product) => {
@@ -232,6 +248,7 @@ function AdminPage() {
       setBartenderLogin("");
       setBartenderPassword("");
       setBartenderRole("bartender");
+      setStaffActionMessage("Сотрудник создан");
       await refreshAdminData();
     },
   });
@@ -249,7 +266,10 @@ function AdminPage() {
   });
   const deleteBartenderMutation = useMutation({
     mutationFn: (id: string) => deleteBartender({ data: { id, session_token: sessionToken! } }),
-    onSuccess: refreshAdminData,
+    onSuccess: async () => {
+      setStaffActionMessage("Сотрудник удалён");
+      await refreshAdminData();
+    },
   });
   const deleteRestaurantMutation = useMutation({
     mutationFn: (id: string) => deleteRestaurant({ data: { id, session_token: sessionToken! } }),
@@ -257,15 +277,17 @@ function AdminPage() {
   });
   const createCategoryMutation = useMutation({
     mutationFn: () =>
-      createCategory({ data: { name: categoryName.trim(), session_token: sessionToken! } }),
+      createCategory({
+        data: { name: categoryName.trim(), area: categoryArea, session_token: sessionToken! },
+      }),
     onSuccess: async () => {
       setCategoryName("");
       await refreshAdminData();
     },
   });
   const updateCategoryMutation = useMutation({
-    mutationFn: ({ id, name }: { id: string; name: string }) =>
-      updateCategory({ data: { id, name: name.trim(), session_token: sessionToken! } }),
+    mutationFn: ({ id, name, area }: { id: string; name: string; area: ProductArea }) =>
+      updateCategory({ data: { id, name: name.trim(), area, session_token: sessionToken! } }),
     onSuccess: refreshAdminData,
   });
   const deleteCategoryMutation = useMutation({
@@ -370,7 +392,8 @@ function AdminPage() {
   }
 
   function confirmDeleteBartender(id: string, name: string) {
-    if (!window.confirm(`Удалить бармена "${name}"?`)) return;
+    if (!window.confirm(`Удалить сотрудника "${name}"?`)) return;
+    setStaffActionMessage(null);
     deleteBartenderMutation.mutate(id);
   }
 
@@ -471,18 +494,21 @@ function AdminPage() {
             }
           >
             <UserPlus className="size-4" />
-            {createBartenderMutation.isPending ? "Создание..." : "Создать бармена"}
+            {createBartenderMutation.isPending ? "Создание..." : "Создать сотрудника"}
           </Button>
         </form>
-        <ErrorText error={createBartenderMutation.error} fallback="Не удалось создать бармена" />
+        <ErrorText error={createBartenderMutation.error} fallback="Не удалось создать сотрудника" />
         <ErrorText
           error={updateBartenderMutation.error}
-          fallback="Не удалось изменить ресторан бармена"
+          fallback="Не удалось изменить ресторан сотрудника"
         />
         {bartenderAssignmentMessage && (
           <p className="mb-3 text-sm text-muted-foreground">{bartenderAssignmentMessage}</p>
         )}
-        <ErrorText error={deleteBartenderMutation.error} fallback="Не удалось удалить бармена" />
+        <ErrorText error={deleteBartenderMutation.error} fallback="Не удалось удалить сотрудника" />
+        {staffActionMessage && (
+          <p className="mb-3 text-sm text-muted-foreground">{staffActionMessage}</p>
+        )}
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-sm">
             <thead className="text-xs uppercase text-muted-foreground">
@@ -575,51 +601,87 @@ function AdminPage() {
             placeholder="Название категории"
             className="sm:max-w-sm"
           />
+          <AreaSelect value={categoryArea} onChange={setCategoryArea} />
           <Button type="submit" disabled={createCategoryMutation.isPending}>
             <Tags className="size-4" />
             {createCategoryMutation.isPending ? "Сохранение..." : "Создать категорию"}
           </Button>
         </form>
         <ErrorText error={createCategoryMutation.error} fallback="Не удалось создать категорию" />
-        <ErrorText
-          error={updateCategoryMutation.error}
-          fallback="Не удалось переименовать категорию"
-        />
+        <ErrorText error={updateCategoryMutation.error} fallback="Не удалось изменить категорию" />
         <ErrorText error={deleteCategoryMutation.error} fallback="Не удалось удалить категорию" />
-        <ul className="divide-y divide-border rounded-lg border border-border">
-          {categories.map((category) => {
-            const value = categoryNames[category.id] ?? category.name;
-            return (
-              <li key={category.id} className="flex flex-col gap-2 px-3 py-2 sm:flex-row">
-                <Input
-                  value={value}
-                  onChange={(event) =>
-                    setCategoryNames((prev) => ({ ...prev, [category.id]: event.target.value }))
-                  }
-                />
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={
-                    !value.trim() || value === category.name || updateCategoryMutation.isPending
-                  }
-                  onClick={() => updateCategoryMutation.mutate({ id: category.id, name: value })}
-                >
-                  <Save className="size-4" />
-                  Сохранить
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={deleteCategoryMutation.isPending}
-                  onClick={() => deleteCategoryMutation.mutate(category.id)}
-                >
-                  Удалить
-                </Button>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="mb-3 max-w-48">
+          <AreaFilter value={categoryAreaFilter} onChange={setCategoryAreaFilter} />
+        </div>
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead className="text-xs uppercase text-muted-foreground">
+              <tr className="border-b border-border">
+                <th className="px-3 py-2 text-left font-medium">Название</th>
+                <th className="px-3 py-2 text-left font-medium">Зона</th>
+                <th className="px-3 py-2 text-left font-medium">Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredCategories.map((category) => {
+                const value = categoryNames[category.id] ?? category.name;
+                const area =
+                  categoryAreas[category.id] ?? (category.area === "kitchen" ? "kitchen" : "bar");
+                return (
+                  <tr key={category.id} className="border-b border-border last:border-b-0">
+                    <td className="px-3 py-2">
+                      <Input
+                        value={value}
+                        onChange={(event) =>
+                          setCategoryNames((prev) => ({
+                            ...prev,
+                            [category.id]: event.target.value,
+                          }))
+                        }
+                        className="min-w-48"
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <AreaSelect
+                        value={area}
+                        onChange={(nextArea) =>
+                          setCategoryAreas((prev) => ({ ...prev, [category.id]: nextArea }))
+                        }
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex min-w-48 gap-2">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={
+                            !value.trim() ||
+                            (value === category.name && area === (category.area ?? "bar")) ||
+                            updateCategoryMutation.isPending
+                          }
+                          onClick={() =>
+                            updateCategoryMutation.mutate({ id: category.id, name: value, area })
+                          }
+                        >
+                          <Save className="size-4" />
+                          Сохранить
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          disabled={deleteCategoryMutation.isPending}
+                          onClick={() => deleteCategoryMutation.mutate(category.id)}
+                        >
+                          Удалить
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="rounded-xl border border-border bg-card p-4">
@@ -632,7 +694,7 @@ function AdminPage() {
           />
           <CategorySelect
             value={newProduct.category_id}
-            categories={categories}
+            categories={newProductCategories}
             onChange={(value) => setNewProduct((prev) => ({ ...prev, category_id: value }))}
           />
           <UnitSelect
@@ -645,7 +707,9 @@ function AdminPage() {
           />
           <AreaSelect
             value={newProduct.area}
-            onChange={(value) => setNewProduct((prev) => ({ ...prev, area: value }))}
+            onChange={(value) =>
+              setNewProduct((prev) => ({ ...prev, area: value, category_id: "" }))
+            }
           />
           <Input
             inputMode="decimal"
@@ -657,7 +721,7 @@ function AdminPage() {
           />
           <Button
             type="submit"
-            disabled={createProductMutation.isPending || categories.length === 0}
+            disabled={createProductMutation.isPending || newProductCategories.length === 0}
           >
             <Package className="size-4" />
             {createProductMutation.isPending ? "Создание..." : "Создать товар"}
@@ -722,7 +786,9 @@ function AdminPage() {
                     <td className="px-3 py-2">
                       <CategorySelect
                         value={draft.category_id}
-                        categories={categories}
+                        categories={categories.filter(
+                          (category) => (category.area ?? "bar") === draft.area,
+                        )}
                         onChange={(value) => setProductDraft(product.id, { category_id: value })}
                       />
                     </td>
@@ -735,7 +801,9 @@ function AdminPage() {
                     <td className="px-3 py-2">
                       <AreaSelect
                         value={draft.area}
-                        onChange={(value) => setProductDraft(product.id, { area: value })}
+                        onChange={(value) =>
+                          setProductDraft(product.id, { area: value, category_id: "" })
+                        }
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -941,6 +1009,27 @@ function AreaSelect({
           {productAreaLabel(area)}
         </option>
       ))}
+    </select>
+  );
+}
+
+function AreaFilter({
+  value,
+  onChange,
+}: {
+  value: "all" | ProductArea;
+  onChange: (value: "all" | ProductArea) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value as "all" | ProductArea)}
+      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+      aria-label="Фильтр категорий по зоне"
+    >
+      <option value="all">Все зоны</option>
+      <option value="bar">Бар</option>
+      <option value="kitchen">Кухня</option>
     </select>
   );
 }

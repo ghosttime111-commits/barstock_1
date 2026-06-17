@@ -463,7 +463,7 @@ export const listCategoriesFn = createServerFn({ method: "POST" })
     const { getBarstock } = await import("./barstock.server");
     const { data: rows, error } = await getBarstock()
       .from("categories")
-      .select("id,name")
+      .select("id,name,area")
       .order("name");
     if (error) throw new Error(error.message);
     return rows ?? [];
@@ -471,26 +471,8 @@ export const listCategoriesFn = createServerFn({ method: "POST" })
 
 export const createCategoryFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
-    sessionSchema.extend({ name: z.string().trim().min(1).max(160) }).parse(input),
-  )
-  .handler(async ({ data }) => {
-    const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
-
-    const { getBarstock } = await import("./barstock.server");
-    const { data: category, error } = await getBarstock()
-      .from("categories")
-      .insert({ name: data.name })
-      .select("id,name")
-      .single();
-    if (error) throw new Error(error.message);
-    return category;
-  });
-
-export const updateCategoryFn = createServerFn({ method: "POST" })
-  .inputValidator((input) =>
     sessionSchema
-      .extend({ id: z.string().uuid(), name: z.string().trim().min(1).max(160) })
+      .extend({ name: z.string().trim().min(1).max(160), area: inventoryAreaSchema })
       .parse(input),
   )
   .handler(async ({ data }) => {
@@ -500,9 +482,44 @@ export const updateCategoryFn = createServerFn({ method: "POST" })
     const { getBarstock } = await import("./barstock.server");
     const { data: category, error } = await getBarstock()
       .from("categories")
-      .update({ name: data.name })
+      .insert({ name: data.name, area: data.area })
+      .select("id,name,area")
+      .single();
+    if (error) throw new Error(error.message);
+    return category;
+  });
+
+export const updateCategoryFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1).max(160),
+        area: inventoryAreaSchema,
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "accountant");
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { count, error: productsError } = await sb
+      .from("products")
+      .select("id", { count: "exact", head: true })
+      .eq("category_id", data.id)
+      .neq("area", data.area);
+    if (productsError) throw new Error(productsError.message);
+    if ((count ?? 0) > 0) {
+      throw new Error("Нельзя изменить зону категории: в ней есть товары другой зоны");
+    }
+
+    const { data: category, error } = await sb
+      .from("categories")
+      .update({ name: data.name, area: data.area })
       .eq("id", data.id)
-      .select("id,name")
+      .select("id,name,area")
       .single();
     if (error) throw new Error(error.message);
     return category;
@@ -563,7 +580,19 @@ export const createProductFn = createServerFn({ method: "POST" })
     requireRole(ctx, "accountant");
 
     const { getBarstock } = await import("./barstock.server");
-    const { data: product, error } = await getBarstock()
+    const sb = getBarstock();
+    const { data: category, error: categoryError } = await sb
+      .from("categories")
+      .select("id,area")
+      .eq("id", data.category_id)
+      .maybeSingle();
+    if (categoryError) throw new Error(categoryError.message);
+    if (!category) throw new Error("Категория не найдена");
+    if ((category.area ?? "bar") !== data.area) {
+      throw new Error("Зона товара должна совпадать с зоной категории");
+    }
+
+    const { data: product, error } = await sb
       .from("products")
       .insert({
         name: data.name,
@@ -598,7 +627,19 @@ export const updateProductFn = createServerFn({ method: "POST" })
     requireRole(ctx, "accountant");
 
     const { getBarstock } = await import("./barstock.server");
-    const { data: product, error } = await getBarstock()
+    const sb = getBarstock();
+    const { data: category, error: categoryError } = await sb
+      .from("categories")
+      .select("id,area")
+      .eq("id", data.category_id)
+      .maybeSingle();
+    if (categoryError) throw new Error(categoryError.message);
+    if (!category) throw new Error("Категория не найдена");
+    if ((category.area ?? "bar") !== data.area) {
+      throw new Error("Зона товара должна совпадать с зоной категории");
+    }
+
+    const { data: product, error } = await sb
       .from("products")
       .update({
         name: data.name,
@@ -752,7 +793,7 @@ export const getInventoryFn = createServerFn({ method: "POST" })
         .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
         .eq("id", data.id)
         .maybeSingle(),
-      sb.from("categories").select("id,name").order("name"),
+      sb.from("categories").select("id,name,area").order("name"),
       sb.from("products").select("id,name,unit,category_id,status,area").order("name"),
       sb
         .from("inventory_items")
@@ -775,7 +816,9 @@ export const getInventoryFn = createServerFn({ method: "POST" })
 
     return {
       inventory: inv,
-      categories: cats ?? [],
+      categories: (cats ?? []).filter(
+        (category) => (category.area ?? "bar") === (inv.area ?? "bar"),
+      ),
       products: (prods ?? []).filter(
         (product) =>
           (product.area ?? "bar") === (inv.area ?? "bar") &&
@@ -1141,7 +1184,7 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
         .eq("id", data.id)
         .maybeSingle(),
       sb.from("inventories").select("restaurants(id,name)").eq("id", data.id).maybeSingle(),
-      sb.from("categories").select("id,name").order("name"),
+      sb.from("categories").select("id,name,area").order("name"),
       sb.from("products").select("id,name,unit,category_id,status,unit_price,area").order("name"),
       sb.from("inventory_items").select("product_id,quantity").eq("inventory_id", data.id),
       sb.from("expected_items").select("product_id,quantity").eq("inventory_id", data.id),
@@ -1237,7 +1280,7 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
       restaurantIds.length
         ? sb.from("restaurants").select("id,name").in("id", restaurantIds)
         : Promise.resolve({ data: [], error: null }),
-      sb.from("categories").select("id,name").order("name"),
+      sb.from("categories").select("id,name,area").order("name"),
       sb.from("products").select("id,name,unit,category_id,status,unit_price,area").order("name"),
       inventoryIds.length
         ? sb
@@ -1332,7 +1375,7 @@ export const listExpectedFn = createServerFn({ method: "POST" })
           .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
           .eq("id", data.id)
           .maybeSingle(),
-        sb.from("categories").select("id,name").order("name"),
+        sb.from("categories").select("id,name,area").order("name"),
         sb.from("products").select("id,name,unit,category_id,status,area").order("name"),
         sb.from("expected_items").select("product_id,quantity").eq("inventory_id", data.id),
       ]);
@@ -1340,7 +1383,9 @@ export const listExpectedFn = createServerFn({ method: "POST" })
     if (!inv) throw new Error("Переучёт не найден");
     return {
       inventory: inv,
-      categories: cats ?? [],
+      categories: (cats ?? []).filter(
+        (category) => (category.area ?? "bar") === (inv.area ?? "bar"),
+      ),
       products: (prods ?? []).filter((product) => (product.area ?? "bar") === (inv.area ?? "bar")),
       expected: expected ?? [],
     };

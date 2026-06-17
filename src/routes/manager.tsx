@@ -6,6 +6,7 @@ import {
   BarChart3,
   Building2,
   ClipboardCheck,
+  ReceiptText,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
@@ -147,7 +148,7 @@ function ManagerPage() {
 
       {data && (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
             <MetricCard
               icon={<ClipboardCheck className="size-4" />}
               label="Всего переучётов"
@@ -177,6 +178,12 @@ function ManagerPage() {
               value={String(data.summary.problem_positions)}
               tone="warning"
               className="col-span-2 lg:col-span-1"
+            />
+            <MetricCard
+              icon={<ReceiptText className="size-4" />}
+              label="Списания"
+              value={`${formatMoney(data.summary.write_offs_amount)} BYN`}
+              tone="warning"
             />
           </div>
 

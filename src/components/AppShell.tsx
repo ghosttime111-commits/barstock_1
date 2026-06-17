@@ -1,7 +1,7 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, LogOut, Wine } from "lucide-react";
+import { BarChart3, LogOut, ReceiptText, Wine } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { currentSessionFn } from "@/lib/barstock.functions";
@@ -67,6 +67,9 @@ export function AppShell({
 
   const isAccountant = session.user.role === "accountant";
   const canViewStats = isAccountant || session.user.role === "manager";
+  const canViewWriteOffs = ["bartender", "kitchen_manager", "accountant"].includes(
+    session.user.role,
+  );
   const homePath = homePathForRole(session.user.role);
   const roleLabel =
     session.user.role === "accountant"
@@ -91,6 +94,14 @@ export function AppShell({
             )}
           </Link>
           <div className="flex items-center gap-3 text-sm">
+            {canViewWriteOffs && (
+              <Link
+                to="/write-offs"
+                className="inline-flex items-center gap-1 font-medium text-muted-foreground transition hover:text-foreground"
+              >
+                <ReceiptText className="size-4" /> Списания
+              </Link>
+            )}
             {canViewStats && (
               <Link
                 to="/manager"

@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WriteOffsRouteImport } from './routes/write-offs'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as ManagerRouteImport } from './routes/manager'
 import { Route as LoginRouteImport } from './routes/login'
@@ -21,6 +22,11 @@ import { Route as ReportsIdRouteImport } from './routes/reports.$id'
 import { Route as InventoriesIdRouteImport } from './routes/inventories.$id'
 import { Route as ReportsExpectedIdRouteImport } from './routes/reports.expected.$id'
 
+const WriteOffsRoute = WriteOffsRouteImport.update({
+  id: '/write-offs',
+  path: '/write-offs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ReportsRoute = ReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
@@ -84,6 +90,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
   '/reports': typeof ReportsRouteWithChildren
+  '/write-offs': typeof WriteOffsRoute
   '/inventories/$id': typeof InventoriesIdRoute
   '/reports/$id': typeof ReportsIdRoute
   '/inventories/': typeof InventoriesIndexRoute
@@ -95,6 +102,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminRoute
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
+  '/write-offs': typeof WriteOffsRoute
   '/inventories/$id': typeof InventoriesIdRoute
   '/reports/$id': typeof ReportsIdRoute
   '/inventories': typeof InventoriesIndexRoute
@@ -109,6 +117,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
   '/reports': typeof ReportsRouteWithChildren
+  '/write-offs': typeof WriteOffsRoute
   '/inventories/$id': typeof InventoriesIdRoute
   '/reports/$id': typeof ReportsIdRoute
   '/inventories/': typeof InventoriesIndexRoute
@@ -124,6 +133,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/manager'
     | '/reports'
+    | '/write-offs'
     | '/inventories/$id'
     | '/reports/$id'
     | '/inventories/'
@@ -135,6 +145,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/login'
     | '/manager'
+    | '/write-offs'
     | '/inventories/$id'
     | '/reports/$id'
     | '/inventories'
@@ -148,6 +159,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/manager'
     | '/reports'
+    | '/write-offs'
     | '/inventories/$id'
     | '/reports/$id'
     | '/inventories/'
@@ -162,10 +174,18 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   ManagerRoute: typeof ManagerRoute
   ReportsRoute: typeof ReportsRouteWithChildren
+  WriteOffsRoute: typeof WriteOffsRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/write-offs': {
+      id: '/write-offs'
+      path: '/write-offs'
+      fullPath: '/write-offs'
+      preLoaderRoute: typeof WriteOffsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/reports': {
       id: '/reports'
       path: '/reports'
@@ -282,6 +302,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   ManagerRoute: ManagerRoute,
   ReportsRoute: ReportsRouteWithChildren,
+  WriteOffsRoute: WriteOffsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

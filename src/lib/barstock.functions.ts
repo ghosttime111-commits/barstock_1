@@ -12,6 +12,15 @@ const staffRoleSchema = z.enum(["bartender", "kitchen_manager", "accountant", "m
 const inventoryAreaSchema = z.enum(["bar", "kitchen"]);
 const moneySchema = z.number().min(0).max(1_000_000);
 const inventoryEntryTypeSchema = z.enum(["add", "set"]);
+const writeOffFiltersSchema = sessionSchema.extend({
+  month: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/)
+    .nullable()
+    .optional(),
+  restaurant_id: z.string().uuid().nullable().optional(),
+  area: inventoryAreaSchema.nullable().optional(),
+});
 
 type StaffRole = z.infer<typeof staffRoleSchema>;
 type InventoryArea = z.infer<typeof inventoryAreaSchema>;
@@ -1380,6 +1389,163 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
     };
   });
 
+export const createWriteOffFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        product_id: z.string().uuid(),
+        quantity: z.number().positive().max(1_000_000),
+        reason: z.string().trim().min(3).max(1_000),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    const area = requireOperationalRole(ctx);
+    if (!ctx.user.restaurant_id) {
+      throw new Error("Пользователю не назначен ресторан");
+    }
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { data: product, error: productError } = await sb
+      .from("products")
+      .select("id,area,status")
+      .eq("id", data.product_id)
+      .maybeSingle();
+    if (productError) throw new Error(productError.message);
+    if (!product) throw new Error("Товар не найден");
+    if ((product.area ?? "bar") !== area) {
+      throw new Error("Нельзя списать товар другой зоны");
+    }
+    if (product.status !== "approved") {
+      throw new Error("Можно списывать только активные товары");
+    }
+
+    const { data: writeOff, error } = await sb
+      .from("write_offs")
+      .insert({
+        restaurant_id: ctx.user.restaurant_id,
+        area,
+        product_id: product.id,
+        user_id: ctx.user.id,
+        quantity: data.quantity,
+        reason: data.reason,
+      })
+      .select("id,created_at")
+      .single();
+    if (error) throw new Error(error.message);
+    return writeOff;
+  });
+
+export const listWriteOffsFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => writeOffFiltersSchema.parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, ["bartender", "kitchen_manager", "accountant"]);
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const isAccountant = ctx.user.role === "accountant";
+    let query = sb
+      .from("write_offs")
+      .select("id,restaurant_id,area,product_id,user_id,quantity,reason,created_at")
+      .order("created_at", { ascending: false })
+      .limit(isAccountant ? 1_000 : 100);
+
+    if (isAccountant) {
+      if (data.restaurant_id) query = query.eq("restaurant_id", data.restaurant_id);
+      if (data.area) query = query.eq("area", data.area);
+      if (data.month) {
+        const [year, month] = data.month.split("-").map(Number);
+        const start = new Date(Date.UTC(year, month - 1, 1));
+        const end = new Date(Date.UTC(year, month, 1));
+        query = query.gte("created_at", start.toISOString()).lt("created_at", end.toISOString());
+      }
+    } else {
+      const area = requireOperationalRole(ctx);
+      if (!ctx.user.restaurant_id) throw new Error("Пользователю не назначен ресторан");
+      query = query
+        .eq("user_id", ctx.user.id)
+        .eq("restaurant_id", ctx.user.restaurant_id)
+        .eq("area", area);
+    }
+
+    const { data: writeOffs, error } = await query;
+    if (error) throw new Error(error.message);
+
+    const rows = writeOffs ?? [];
+    const productIds = Array.from(new Set(rows.map((row) => row.product_id)));
+    const userIds = Array.from(new Set(rows.map((row) => row.user_id)));
+    const restaurantIds = Array.from(new Set(rows.map((row) => row.restaurant_id)));
+    const operationalArea = isAccountant ? null : requireOperationalRole(ctx);
+
+    const [
+      productsResult,
+      usersResult,
+      usedRestaurantsResult,
+      availableProductsResult,
+      restaurantsResult,
+    ] = await Promise.all([
+      productIds.length
+        ? sb.from("products").select("id,name,unit,unit_price").in("id", productIds)
+        : Promise.resolve({ data: [], error: null }),
+      userIds.length
+        ? sb.from("users").select("id,name").in("id", userIds)
+        : Promise.resolve({ data: [], error: null }),
+      restaurantIds.length
+        ? sb.from("restaurants").select("id,name").in("id", restaurantIds)
+        : Promise.resolve({ data: [], error: null }),
+      operationalArea
+        ? sb
+            .from("products")
+            .select("id,name,unit")
+            .eq("area", operationalArea)
+            .eq("status", "approved")
+            .order("name")
+        : Promise.resolve({ data: [], error: null }),
+      isAccountant
+        ? sb.from("restaurants").select("id,name").order("name")
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    for (const result of [
+      productsResult,
+      usersResult,
+      usedRestaurantsResult,
+      availableProductsResult,
+      restaurantsResult,
+    ]) {
+      if (result.error) throw new Error(result.error.message);
+    }
+
+    const productById = new Map((productsResult.data ?? []).map((row) => [row.id, row]));
+    const userById = new Map((usersResult.data ?? []).map((row) => [row.id, row.name]));
+    const restaurantById = new Map(
+      (usedRestaurantsResult.data ?? []).map((row) => [row.id, row.name]),
+    );
+
+    return {
+      write_offs: rows.map((row) => {
+        const product = productById.get(row.product_id);
+        const quantity = Number(row.quantity);
+        const unitPrice = Number(product?.unit_price ?? 0);
+        return {
+          ...row,
+          quantity,
+          product_name: product?.name ?? "Неизвестный товар",
+          unit: product?.unit ?? "",
+          unit_price: isAccountant ? unitPrice : null,
+          amount: isAccountant ? quantity * unitPrice : null,
+          user_name: userById.get(row.user_id) ?? "Неизвестный пользователь",
+          restaurant_name: restaurantById.get(row.restaurant_id) ?? "Без названия",
+        };
+      }),
+      products: availableProductsResult.data ?? [],
+      restaurants: restaurantsResult.data ?? [],
+    };
+  });
+
 export const getManagerStatsFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
     sessionSchema
@@ -1414,13 +1580,29 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
     }
     if (data.area) inventoryQuery = inventoryQuery.eq("area", data.area);
 
-    const [{ data: inventories, error: inventoriesError }, restaurantsResult] = await Promise.all([
+    let writeOffQuery = sb
+      .from("write_offs")
+      .select("product_id,quantity")
+      .gte("created_at", start.toISOString())
+      .lt("created_at", end.toISOString());
+    if (effectiveRestaurantId) {
+      writeOffQuery = writeOffQuery.eq("restaurant_id", effectiveRestaurantId);
+    }
+    if (data.area) writeOffQuery = writeOffQuery.eq("area", data.area);
+
+    const [
+      { data: inventories, error: inventoriesError },
+      { data: writeOffs, error: writeOffsError },
+      restaurantsResult,
+    ] = await Promise.all([
       inventoryQuery,
+      writeOffQuery,
       fixedRestaurantId
         ? sb.from("restaurants").select("id,name").eq("id", fixedRestaurantId).order("name")
         : sb.from("restaurants").select("id,name").order("name"),
     ]);
     if (inventoriesError) throw new Error(inventoriesError.message);
+    if (writeOffsError) throw new Error(writeOffsError.message);
     if (restaurantsResult.error) throw new Error(restaurantsResult.error.message);
 
     const invs = inventories ?? [];
@@ -1445,7 +1627,10 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
     if (expectedError) throw new Error(expectedError.message);
 
     const productIds = Array.from(
-      new Set([...(items ?? []), ...(expected ?? [])].map((row) => row.product_id)),
+      new Set([
+        ...[...(items ?? []), ...(expected ?? [])].map((row) => row.product_id),
+        ...(writeOffs ?? []).map((row) => row.product_id),
+      ]),
     );
     const userIds = Array.from(
       new Set(invs.map((inventory) => inventory.created_by).filter(Boolean) as string[]),
@@ -1473,6 +1658,10 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
     );
     const actualByInventory = new Map<string, Map<string, number>>();
     const expectedByInventory = new Map<string, Map<string, number>>();
+    const writeOffAmount = (writeOffs ?? []).reduce((sum, row) => {
+      const product = productById.get(row.product_id);
+      return sum + Number(row.quantity ?? 0) * Number(product?.unit_price ?? 0);
+    }, 0);
 
     for (const item of items ?? []) {
       const map = actualByInventory.get(item.inventory_id) ?? new Map<string, number>();
@@ -1592,6 +1781,7 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
         surplus: totals.surplus,
         net: totals.surplus - totals.shortage,
         problem_positions: totals.problemPositions,
+        write_offs_amount: writeOffAmount,
       },
       top_products: Array.from(products.values())
         .sort((a, b) => b.shortage + b.surplus - (a.shortage + a.surplus))

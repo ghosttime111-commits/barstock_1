@@ -1,13 +1,19 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
-import { LogOut, Wine } from "lucide-react";
+import { BarChart3, LogOut, Wine } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { currentSessionFn } from "@/lib/barstock.functions";
 import { setSession, useSession } from "@/lib/session";
 
-export type AllowedRole = "bartender" | "accountant" | "kitchen_manager";
+export type AllowedRole = "bartender" | "accountant" | "kitchen_manager" | "manager";
+
+function homePathForRole(role: string) {
+  if (role === "accountant") return "/reports" as const;
+  if (role === "manager") return "/manager" as const;
+  return "/inventories" as const;
+}
 
 export function AppShell({
   children,
@@ -36,8 +42,7 @@ export function AppShell({
       return;
     }
     if (allow && !allow.includes(session.user.role as AllowedRole)) {
-      const home = session.user.role === "accountant" ? "/reports" : "/inventories";
-      navigate({ to: home, replace: true });
+      navigate({ to: homePathForRole(session.user.role), replace: true });
     }
   }, [ready, session, allow, navigate]);
 
@@ -61,13 +66,16 @@ export function AppShell({
   }
 
   const isAccountant = session.user.role === "accountant";
-  const homePath = isAccountant ? "/reports" : "/inventories";
+  const canViewStats = isAccountant || session.user.role === "manager";
+  const homePath = homePathForRole(session.user.role);
   const roleLabel =
     session.user.role === "accountant"
       ? "Бухгалтер"
-      : session.user.role === "kitchen_manager"
-        ? "Заведующий производством"
-        : "Бармен";
+      : session.user.role === "manager"
+        ? "Управляющий"
+        : session.user.role === "kitchen_manager"
+          ? "Заведующий производством"
+          : "Бармен";
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -83,6 +91,14 @@ export function AppShell({
             )}
           </Link>
           <div className="flex items-center gap-3 text-sm">
+            {canViewStats && (
+              <Link
+                to="/manager"
+                className="inline-flex items-center gap-1 font-medium text-muted-foreground transition hover:text-foreground"
+              >
+                <BarChart3 className="size-4" /> Статистика
+              </Link>
+            )}
             {isAccountant && (
               <Link
                 to="/admin"

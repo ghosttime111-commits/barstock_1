@@ -37,7 +37,7 @@ export const Route = createFileRoute("/admin")({
 });
 
 type Restaurant = { id: string; name: string };
-type StaffRole = "bartender" | "kitchen_manager" | "accountant";
+type StaffRole = "bartender" | "kitchen_manager" | "accountant" | "manager";
 type ProductArea = "bar" | "kitchen";
 type Bartender = {
   id: string;
@@ -71,10 +71,11 @@ type ProductDraft = {
 const productUnits: ProductUnit[] = ["л", "кг", "шт", "бут"];
 const productStatuses: ProductStatus[] = ["approved", "pending", "archived"];
 const productAreas: ProductArea[] = ["bar", "kitchen"];
-const staffRoles: StaffRole[] = ["bartender", "kitchen_manager", "accountant"];
+const staffRoles: StaffRole[] = ["bartender", "kitchen_manager", "manager", "accountant"];
 
 function staffRoleLabel(role: string) {
   if (role === "accountant") return "Бухгалтер";
+  if (role === "manager") return "Управляющий";
   if (role === "kitchen_manager") return "Заведующий производством";
   return "Бармен";
 }
@@ -239,7 +240,12 @@ function AdminPage() {
           login: bartenderLogin.trim(),
           password: bartenderPassword,
           role: bartenderRole,
-          restaurant_id: bartenderRole === "accountant" ? null : bartenderRestaurantId,
+          restaurant_id:
+            bartenderRole === "accountant"
+              ? null
+              : bartenderRole === "manager"
+                ? bartenderRestaurantId || null
+                : bartenderRestaurantId,
           session_token: sessionToken!,
         },
       }),
@@ -253,7 +259,7 @@ function AdminPage() {
     },
   });
   const updateBartenderMutation = useMutation({
-    mutationFn: ({ id, restaurantId }: { id: string; restaurantId: string }) =>
+    mutationFn: ({ id, restaurantId }: { id: string; restaurantId: string | null }) =>
       updateBartenderRestaurant({
         data: { id, restaurant_id: restaurantId, session_token: sessionToken! },
       }),
@@ -373,7 +379,7 @@ function AdminPage() {
       bartenderName.trim() &&
       bartenderLogin.trim() &&
       bartenderPassword &&
-      (bartenderRole === "accountant" || bartenderRestaurantId)
+      (bartenderRole === "accountant" || bartenderRole === "manager" || bartenderRestaurantId)
     ) {
       createBartenderMutation.mutate();
     }
@@ -485,12 +491,14 @@ function AdminPage() {
             value={bartenderRestaurantId}
             restaurants={restaurants}
             onChange={setBartenderRestaurantId}
+            allowAll={bartenderRole === "manager"}
           />
           <Button
             type="submit"
             disabled={
               createBartenderMutation.isPending ||
-              (bartenderRole !== "accountant" && restaurants.length === 0)
+              ((bartenderRole === "bartender" || bartenderRole === "kitchen_manager") &&
+                restaurants.length === 0)
             }
           >
             <UserPlus className="size-4" />
@@ -536,7 +544,9 @@ function AdminPage() {
                     <td className="px-3 py-2">
                       {bartender.restaurant_id
                         ? (restaurantById.get(bartender.restaurant_id) ?? "Не найден")
-                        : "Не назначен"}
+                        : bartender.role === "manager"
+                          ? "Все рестораны"
+                          : "Не назначен"}
                     </td>
                     <td className="px-3 py-2">
                       {bartender.is_active === false
@@ -548,6 +558,7 @@ function AdminPage() {
                         <RestaurantSelect
                           value={selectedRestaurantId}
                           restaurants={restaurants}
+                          allowAll={bartender.role === "manager"}
                           onChange={(value) =>
                             setAssignments((prev) => ({ ...prev, [bartender.id]: value }))
                           }
@@ -556,14 +567,14 @@ function AdminPage() {
                           type="button"
                           size="sm"
                           disabled={
-                            !selectedRestaurantId ||
-                            selectedRestaurantId === bartender.restaurant_id ||
+                            (!selectedRestaurantId && bartender.role !== "manager") ||
+                            selectedRestaurantId === (bartender.restaurant_id ?? "") ||
                             updateBartenderMutation.isPending
                           }
                           onClick={() =>
                             updateBartenderMutation.mutate({
                               id: bartender.id,
-                              restaurantId: selectedRestaurantId,
+                              restaurantId: selectedRestaurantId || null,
                             })
                           }
                         >
@@ -923,10 +934,12 @@ function RestaurantSelect({
   value,
   restaurants,
   onChange,
+  allowAll = false,
 }: {
   value: string;
   restaurants: Restaurant[];
   onChange: (value: string) => void;
+  allowAll?: boolean;
 }) {
   return (
     <select
@@ -934,7 +947,7 @@ function RestaurantSelect({
       onChange={(event) => onChange(event.target.value)}
       className="h-9 rounded-md border border-input bg-background px-3 text-sm"
     >
-      <option value="">Ресторан</option>
+      <option value="">{allowAll ? "Все рестораны" : "Ресторан"}</option>
       {restaurants.map((restaurant) => (
         <option key={restaurant.id} value={restaurant.id}>
           {restaurant.name}

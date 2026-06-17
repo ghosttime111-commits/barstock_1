@@ -24,7 +24,12 @@ function Index() {
       navigate({ to: "/login", replace: true });
       return;
     }
-    const home = session.user.role === "accountant" ? "/reports" : "/inventories";
+    const home =
+      session.user.role === "accountant"
+        ? "/reports"
+        : session.user.role === "manager"
+          ? "/manager"
+          : "/inventories";
     navigate({ to: home, replace: true });
   }, [ready, session, navigate]);
   return (

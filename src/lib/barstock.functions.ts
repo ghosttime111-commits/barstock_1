@@ -8,7 +8,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const PASSWORD_ITERATIONS = 210_000;
 const productUnitSchema = z.enum(["л", "кг", "шт", "бут"]);
 const productStatusSchema = z.enum(["approved", "pending", "archived"]);
-const staffRoleSchema = z.enum(["bartender", "kitchen_manager", "accountant"]);
+const staffRoleSchema = z.enum(["bartender", "kitchen_manager", "accountant", "manager"]);
 const inventoryAreaSchema = z.enum(["bar", "kitchen"]);
 const moneySchema = z.number().min(0).max(1_000_000);
 const inventoryEntryTypeSchema = z.enum(["add", "set"]);
@@ -282,7 +282,7 @@ export const listBartendersFn = createServerFn({ method: "POST" })
     const { data: rows, error } = await getBarstock()
       .from("users")
       .select("id,name,login,role,restaurant_id,is_active")
-      .in("role", ["bartender", "kitchen_manager", "accountant"])
+      .in("role", ["bartender", "kitchen_manager", "accountant", "manager"])
       .neq("is_active", false)
       .order("name");
     if (error) throw new Error(error.message);
@@ -355,7 +355,7 @@ export const deleteBartenderFn = createServerFn({ method: "POST" })
       .eq("id", data.id)
       .maybeSingle();
     if (bartenderError) throw new Error(bartenderError.message);
-    if (!bartender || !["bartender", "kitchen_manager"].includes(bartender.role))
+    if (!bartender || !["bartender", "kitchen_manager", "manager"].includes(bartender.role))
       throw new Error("Staff member not found");
 
     const [
@@ -381,14 +381,16 @@ export const deleteBartenderFn = createServerFn({ method: "POST" })
       .from("users")
       .delete()
       .eq("id", data.id)
-      .in("role", ["bartender", "kitchen_manager"]);
+      .in("role", ["bartender", "kitchen_manager", "manager"]);
     if (error) throw new Error(error.message);
     return { ok: true, mode: "hard" };
   });
 
 export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
-    sessionSchema.extend({ id: z.string().uuid(), restaurant_id: z.string().uuid() }).parse(input),
+    sessionSchema
+      .extend({ id: z.string().uuid(), restaurant_id: z.string().uuid().nullable() })
+      .parse(input),
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
@@ -396,24 +398,35 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
-    const [
-      { data: bartender, error: bartenderError },
-      { data: restaurant, error: restaurantError },
-    ] = await Promise.all([
-      sb.from("users").select("id,role").eq("id", data.id).maybeSingle(),
-      sb.from("restaurants").select("id").eq("id", data.restaurant_id).maybeSingle(),
-    ]);
+    const { data: bartender, error: bartenderError } = await sb
+      .from("users")
+      .select("id,role")
+      .eq("id", data.id)
+      .maybeSingle();
     if (bartenderError) throw new Error(bartenderError.message);
-    if (restaurantError) throw new Error(restaurantError.message);
-    if (!bartender || !["bartender", "kitchen_manager"].includes(bartender.role))
+    if (!bartender || !["bartender", "kitchen_manager", "manager"].includes(bartender.role))
       throw new Error("Staff member not found");
-    if (!restaurant) throw new Error("Ресторан не найден");
+    if (
+      (bartender.role === "bartender" || bartender.role === "kitchen_manager") &&
+      !data.restaurant_id
+    ) {
+      throw new Error("Для этой роли ресторан обязателен");
+    }
+    if (data.restaurant_id) {
+      const { data: restaurant, error: restaurantError } = await sb
+        .from("restaurants")
+        .select("id")
+        .eq("id", data.restaurant_id)
+        .maybeSingle();
+      if (restaurantError) throw new Error(restaurantError.message);
+      if (!restaurant) throw new Error("Ресторан не найден");
+    }
 
     const { data: user, error } = await sb
       .from("users")
       .update({ restaurant_id: data.restaurant_id })
       .eq("id", data.id)
-      .in("role", ["bartender", "kitchen_manager"])
+      .in("role", ["bartender", "kitchen_manager", "manager"])
       .select("id,name,login,role,restaurant_id,is_active")
       .single();
     if (error) throw new Error(error.message);
@@ -435,7 +448,7 @@ export const deleteRestaurantFn = createServerFn({ method: "POST" })
       sb
         .from("users")
         .select("id", { count: "exact", head: true })
-        .in("role", ["bartender", "kitchen_manager"])
+        .in("role", ["bartender", "kitchen_manager", "manager"])
         .eq("restaurant_id", data.id)
         .neq("is_active", false),
       sb
@@ -1164,7 +1177,7 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, "accountant");
+    requireRole(ctx, ["accountant", "manager"]);
 
     const { getBarstock } = await import("./barstock.server");
     const { classifyDiscrepancy } = await import("./expectedStock");
@@ -1192,6 +1205,13 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
     ]);
     if (e1) throw new Error(e1.message);
     if (!inv) throw new Error("Переучёт не найден");
+    if (ctx.user.role === "manager") {
+      if (inv.status !== "completed")
+        throw new Error("Управляющему доступны только закрытые отчёты");
+      if (ctx.user.restaurant_id && ctx.user.restaurant_id !== inv.restaurant_id) {
+        throw new Error("Нет доступа к отчёту другого ресторана");
+      }
+    }
 
     const actualMap = new Map<string, number>();
     (items ?? []).forEach((it) => actualMap.set(it.product_id, Number(it.quantity)));
@@ -1357,6 +1377,232 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
           rows,
         };
       }),
+    };
+  });
+
+export const getManagerStatsFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        month: z.string().regex(/^\d{4}-\d{2}$/),
+        restaurant_id: z.string().uuid().nullable().optional(),
+        area: inventoryAreaSchema.nullable().optional(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, ["manager", "accountant"]);
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const [year, month] = data.month.split("-").map(Number);
+    const start = new Date(Date.UTC(year, month - 1, 1));
+    const end = new Date(Date.UTC(year, month, 1));
+    const fixedRestaurantId = ctx.user.role === "manager" ? ctx.user.restaurant_id : null;
+    const effectiveRestaurantId = fixedRestaurantId ?? data.restaurant_id ?? null;
+
+    let inventoryQuery = sb
+      .from("inventories")
+      .select("id,restaurant_id,status,created_at,created_by,area")
+      .eq("status", "completed")
+      .gte("created_at", start.toISOString())
+      .lt("created_at", end.toISOString())
+      .order("created_at", { ascending: false });
+    if (effectiveRestaurantId) {
+      inventoryQuery = inventoryQuery.eq("restaurant_id", effectiveRestaurantId);
+    }
+    if (data.area) inventoryQuery = inventoryQuery.eq("area", data.area);
+
+    const [{ data: inventories, error: inventoriesError }, restaurantsResult] = await Promise.all([
+      inventoryQuery,
+      fixedRestaurantId
+        ? sb.from("restaurants").select("id,name").eq("id", fixedRestaurantId).order("name")
+        : sb.from("restaurants").select("id,name").order("name"),
+    ]);
+    if (inventoriesError) throw new Error(inventoriesError.message);
+    if (restaurantsResult.error) throw new Error(restaurantsResult.error.message);
+
+    const invs = inventories ?? [];
+    const inventoryIds = invs.map((inventory) => inventory.id);
+    const [{ data: items, error: itemsError }, { data: expected, error: expectedError }] =
+      inventoryIds.length
+        ? await Promise.all([
+            sb
+              .from("inventory_items")
+              .select("inventory_id,product_id,quantity")
+              .in("inventory_id", inventoryIds),
+            sb
+              .from("expected_items")
+              .select("inventory_id,product_id,quantity")
+              .in("inventory_id", inventoryIds),
+          ])
+        : [
+            { data: [], error: null },
+            { data: [], error: null },
+          ];
+    if (itemsError) throw new Error(itemsError.message);
+    if (expectedError) throw new Error(expectedError.message);
+
+    const productIds = Array.from(
+      new Set([...(items ?? []), ...(expected ?? [])].map((row) => row.product_id)),
+    );
+    const userIds = Array.from(
+      new Set(invs.map((inventory) => inventory.created_by).filter(Boolean) as string[]),
+    );
+    const restaurantIds = Array.from(new Set(invs.map((inventory) => inventory.restaurant_id)));
+    const [productsResult, usersResult, usedRestaurantsResult] = await Promise.all([
+      productIds.length
+        ? sb.from("products").select("id,name,unit_price").in("id", productIds)
+        : Promise.resolve({ data: [], error: null }),
+      userIds.length
+        ? sb.from("users").select("id,name").in("id", userIds)
+        : Promise.resolve({ data: [], error: null }),
+      restaurantIds.length
+        ? sb.from("restaurants").select("id,name").in("id", restaurantIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (productsResult.error) throw new Error(productsResult.error.message);
+    if (usersResult.error) throw new Error(usersResult.error.message);
+    if (usedRestaurantsResult.error) throw new Error(usedRestaurantsResult.error.message);
+
+    const productById = new Map((productsResult.data ?? []).map((row) => [row.id, row]));
+    const userById = new Map((usersResult.data ?? []).map((row) => [row.id, row.name]));
+    const restaurantById = new Map(
+      (usedRestaurantsResult.data ?? []).map((row) => [row.id, row.name]),
+    );
+    const actualByInventory = new Map<string, Map<string, number>>();
+    const expectedByInventory = new Map<string, Map<string, number>>();
+
+    for (const item of items ?? []) {
+      const map = actualByInventory.get(item.inventory_id) ?? new Map<string, number>();
+      map.set(item.product_id, Number(item.quantity ?? 0));
+      actualByInventory.set(item.inventory_id, map);
+    }
+    for (const item of expected ?? []) {
+      const map = expectedByInventory.get(item.inventory_id) ?? new Map<string, number>();
+      map.set(item.product_id, Number(item.quantity ?? 0));
+      expectedByInventory.set(item.inventory_id, map);
+    }
+
+    type MoneyTotals = { shortage: number; surplus: number; problemPositions: number };
+    type ProductTotals = MoneyTotals & {
+      product_id: string;
+      product_name: string;
+      restaurant_id: string;
+      restaurant_name: string;
+      area: InventoryArea;
+      shortage_count: number;
+      surplus_count: number;
+    };
+    type RestaurantTotals = MoneyTotals & {
+      restaurant_id: string;
+      restaurant_name: string;
+      inventories: number;
+    };
+
+    const totals: MoneyTotals = { shortage: 0, surplus: 0, problemPositions: 0 };
+    const products = new Map<string, ProductTotals>();
+    const restaurants = new Map<string, RestaurantTotals>();
+    const latest = invs.map((inventory) => {
+      const restaurantName = restaurantById.get(inventory.restaurant_id) ?? "Без названия";
+      const restaurant = restaurants.get(inventory.restaurant_id) ?? {
+        restaurant_id: inventory.restaurant_id,
+        restaurant_name: restaurantName,
+        inventories: 0,
+        shortage: 0,
+        surplus: 0,
+        problemPositions: 0,
+      };
+      restaurant.inventories += 1;
+
+      let shortage = 0;
+      let surplus = 0;
+      let problemPositions = 0;
+      const actualMap = actualByInventory.get(inventory.id) ?? new Map<string, number>();
+      const expectedMap = expectedByInventory.get(inventory.id) ?? new Map<string, number>();
+      const ids = new Set([...actualMap.keys(), ...expectedMap.keys()]);
+
+      for (const productId of ids) {
+        const product = productById.get(productId);
+        if (!product) continue;
+        const diff = (actualMap.get(productId) ?? 0) - (expectedMap.get(productId) ?? 0);
+        const money = diff * Number(product.unit_price ?? 0);
+        if (diff === 0) continue;
+
+        problemPositions += 1;
+        totals.problemPositions += 1;
+        restaurant.problemPositions += 1;
+        const key = `${productId}:${inventory.restaurant_id}:${inventory.area ?? "bar"}`;
+        const productTotals = products.get(key) ?? {
+          product_id: productId,
+          product_name: product.name,
+          restaurant_id: inventory.restaurant_id,
+          restaurant_name: restaurantName,
+          area: (inventory.area ?? "bar") as InventoryArea,
+          shortage: 0,
+          surplus: 0,
+          problemPositions: 0,
+          shortage_count: 0,
+          surplus_count: 0,
+        };
+        productTotals.problemPositions += 1;
+
+        if (diff < 0) {
+          const amount = Math.abs(money);
+          shortage += amount;
+          totals.shortage += amount;
+          restaurant.shortage += amount;
+          productTotals.shortage += amount;
+          productTotals.shortage_count += 1;
+        } else {
+          surplus += money;
+          totals.surplus += money;
+          restaurant.surplus += money;
+          productTotals.surplus += money;
+          productTotals.surplus_count += 1;
+        }
+        products.set(key, productTotals);
+      }
+
+      restaurants.set(inventory.restaurant_id, restaurant);
+      return {
+        id: inventory.id,
+        created_at: inventory.created_at,
+        restaurant_id: inventory.restaurant_id,
+        restaurant_name: restaurantName,
+        area: (inventory.area ?? "bar") as InventoryArea,
+        created_by_name: inventory.created_by
+          ? (userById.get(inventory.created_by) ?? "Неизвестно")
+          : "Неизвестно",
+        shortage,
+        surplus,
+        net: surplus - shortage,
+        problem_positions: problemPositions,
+      };
+    });
+
+    return {
+      month: data.month,
+      scope_restaurant_id: fixedRestaurantId,
+      restaurants: restaurantsResult.data ?? [],
+      summary: {
+        inventories: invs.length,
+        shortage: totals.shortage,
+        surplus: totals.surplus,
+        net: totals.surplus - totals.shortage,
+        problem_positions: totals.problemPositions,
+      },
+      top_products: Array.from(products.values())
+        .sort((a, b) => b.shortage + b.surplus - (a.shortage + a.surplus))
+        .slice(0, 20),
+      restaurant_stats: Array.from(restaurants.values())
+        .map((restaurant) => ({
+          ...restaurant,
+          net: restaurant.surplus - restaurant.shortage,
+        }))
+        .sort((a, b) => b.shortage + b.surplus - (a.shortage + a.surplus)),
+      latest_inventories: latest.slice(0, 10),
     };
   });
 

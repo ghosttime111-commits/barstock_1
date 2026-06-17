@@ -29,7 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 export const Route = createFileRoute("/reports/$id")({
   head: () => ({ meta: [{ title: "Отчёт по переучёту — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant"]}>
+    <AppShell allow={["accountant", "manager"]}>
       <ReportPage />
     </AppShell>
   ),
@@ -41,6 +41,7 @@ function ReportPage() {
   const { id } = Route.useParams();
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
+  const isAccountant = session?.user.role === "accountant";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const getReport = useServerFn(getInventoryReportFn);
@@ -137,10 +138,10 @@ function ReportPage() {
     <div className="space-y-6">
       <div>
         <Link
-          to="/reports"
+          to={isAccountant ? "/reports" : "/manager"}
           className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
         >
-          <ArrowLeft className="size-4" /> К отчётам
+          <ArrowLeft className="size-4" /> {isAccountant ? "К отчётам" : "К статистике"}
         </Link>
         <h1 className="text-2xl font-semibold tracking-tight">
           Отчёт по переучёту от{" "}
@@ -158,13 +159,15 @@ function ReportPage() {
             <span className="text-sm text-muted-foreground">Предварительный отчёт</span>
           )}
         </div>
-        <Link
-          to="/reports/expected/$id"
-          params={{ id: inventory.id }}
-          className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
-        >
-          <FileSpreadsheet className="size-4" /> Учётные остатки (заполнить / импорт Excel)
-        </Link>
+        {isAccountant && (
+          <Link
+            to="/reports/expected/$id"
+            params={{ id: inventory.id }}
+            className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
+          >
+            <FileSpreadsheet className="size-4" /> Учётные остатки (заполнить / импорт Excel)
+          </Link>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -180,37 +183,39 @@ function ReportPage() {
         />
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="secondary" onClick={() => exportInventoryToExcel(data)}>
-          <Download className="size-4" /> Скачать Excel
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={correctionMutation.isPending || isCorrectionRequired}
-          onClick={() => setCorrectionOpen(true)}
-        >
-          <RotateCcw className="size-4" />
-          Вернуть на доработку
-        </Button>
-        <Button
-          type="button"
-          variant="destructive"
-          onClick={confirmAndDelete}
-          disabled={deleteMutation.isPending}
-        >
-          <Trash2 className="size-4" />
-          {deleteMutation.isPending ? "Удаление..." : "Удалить переучёт"}
-        </Button>
-      </div>
-      {deleteMutation.error && (
+      {isAccountant && (
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="secondary" onClick={() => exportInventoryToExcel(data)}>
+            <Download className="size-4" /> Скачать Excel
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={correctionMutation.isPending || isCorrectionRequired}
+            onClick={() => setCorrectionOpen(true)}
+          >
+            <RotateCcw className="size-4" />
+            Вернуть на доработку
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={confirmAndDelete}
+            disabled={deleteMutation.isPending}
+          >
+            <Trash2 className="size-4" />
+            {deleteMutation.isPending ? "Удаление..." : "Удалить переучёт"}
+          </Button>
+        </div>
+      )}
+      {isAccountant && deleteMutation.error && (
         <p className="text-sm text-destructive">
           {deleteMutation.error instanceof Error
             ? deleteMutation.error.message
             : "Не удалось удалить переучёт"}
         </p>
       )}
-      {correctionMutation.error && (
+      {isAccountant && correctionMutation.error && (
         <p className="text-sm text-destructive">
           {correctionMutation.error instanceof Error
             ? correctionMutation.error.message
@@ -218,46 +223,48 @@ function ReportPage() {
         </p>
       )}
 
-      <Dialog open={correctionOpen} onOpenChange={setCorrectionOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Вернуть переучёт на доработку</DialogTitle>
-            <DialogDescription>
-              Бармен увидит комментарий и сможет исправить фактические остатки.
-            </DialogDescription>
-          </DialogHeader>
-          <label className="grid gap-2 text-sm">
-            <span className="font-medium">Комментарий для бармена</span>
-            <Textarea
-              value={correctionComment}
-              onChange={(event) => {
-                setCorrectionComment(event.target.value);
-                setCorrectionError(null);
-              }}
-              placeholder="Что нужно проверить или исправить"
-              rows={5}
-            />
-          </label>
-          {correctionError && <p className="text-sm text-destructive">{correctionError}</p>}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setCorrectionOpen(false)}
-              disabled={correctionMutation.isPending}
-            >
-              Отмена
-            </Button>
-            <Button
-              type="button"
-              onClick={submitCorrection}
-              disabled={correctionMutation.isPending}
-            >
-              {correctionMutation.isPending ? "Возврат..." : "Вернуть"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {isAccountant && (
+        <Dialog open={correctionOpen} onOpenChange={setCorrectionOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Вернуть переучёт на доработку</DialogTitle>
+              <DialogDescription>
+                Бармен увидит комментарий и сможет исправить фактические остатки.
+              </DialogDescription>
+            </DialogHeader>
+            <label className="grid gap-2 text-sm">
+              <span className="font-medium">Комментарий для бармена</span>
+              <Textarea
+                value={correctionComment}
+                onChange={(event) => {
+                  setCorrectionComment(event.target.value);
+                  setCorrectionError(null);
+                }}
+                placeholder="Что нужно проверить или исправить"
+                rows={5}
+              />
+            </label>
+            {correctionError && <p className="text-sm text-destructive">{correctionError}</p>}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setCorrectionOpen(false)}
+                disabled={correctionMutation.isPending}
+              >
+                Отмена
+              </Button>
+              <Button
+                type="button"
+                onClick={submitCorrection}
+                disabled={correctionMutation.isPending}
+              >
+                {correctionMutation.isPending ? "Возврат..." : "Вернуть"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       <div className="flex flex-wrap gap-1.5">
         <FilterPill active={filter === "all"} onClick={() => setFilter("all")}>

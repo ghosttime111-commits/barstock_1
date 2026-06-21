@@ -1879,6 +1879,12 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
       restaurant_name: restaurant.restaurant_name,
       amount: restaurant.write_offs,
     }));
+    const shortageByDate = new Map<string, number>();
+    for (const inventory of latest) {
+      if (inventory.shortage <= 0) continue;
+      const date = inventory.created_at.slice(0, 10);
+      shortageByDate.set(date, (shortageByDate.get(date) ?? 0) + inventory.shortage);
+    }
 
     return {
       month: data.month,
@@ -1894,6 +1900,9 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
       },
       writeOffsTotal,
       writeOffsByRestaurant,
+      shortage_trend: Array.from(shortageByDate, ([date, amount]) => ({ date, amount })).sort(
+        (left, right) => left.date.localeCompare(right.date),
+      ),
       topWriteOffProducts: Array.from(writeOffProducts.values())
         .sort((a, b) => b.amount - a.amount)
         .slice(0, 20),

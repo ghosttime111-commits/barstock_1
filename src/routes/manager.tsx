@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
   AlertTriangle,
   BarChart3,
@@ -14,6 +15,7 @@ import { useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
+import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/lib/formatMoney";
 import { formatQuantity } from "@/lib/formatQuantity";
@@ -188,6 +190,8 @@ function ManagerPage() {
             />
           </div>
 
+          <ShortageTrendChart data={data.shortage_trend} />
+
           <StatsSection title="Топ проблемных товаров">
             <DataTable
               headers={[
@@ -339,6 +343,89 @@ function ManagerPage() {
       )}
     </div>
   );
+}
+
+function ShortageTrendChart({ data }: { data: Array<{ date: string; amount: number }> }) {
+  return (
+    <section className="rounded-lg border border-border bg-card p-4">
+      <h2 className="mb-4 text-lg font-semibold">Динамика недостач (BYN)</h2>
+      {data.length === 0 ? (
+        <p className="py-16 text-center text-sm text-muted-foreground">
+          Нет данных о недостачах за выбранный период
+        </p>
+      ) : (
+        <ChartContainer
+          config={{ shortage: { label: "Сумма недостач", color: "#ef4444" } }}
+          className="h-[280px] w-full aspect-auto"
+        >
+          <AreaChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
+            <defs>
+              <linearGradient id="shortage-fill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#ef4444" stopOpacity={0.35} />
+                <stop offset="100%" stopColor="#ef4444" stopOpacity={0.03} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" />
+            <XAxis
+              dataKey="date"
+              tickLine={false}
+              axisLine={false}
+              minTickGap={24}
+              tickFormatter={formatShortDate}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              width={62}
+              tickFormatter={(value: number) => formatMoney(value)}
+            />
+            <ChartTooltip
+              cursor={{ stroke: "#ef4444", strokeOpacity: 0.3 }}
+              content={<ShortageTrendTooltip />}
+            />
+            <Area
+              type="monotone"
+              dataKey="amount"
+              stroke="#ef4444"
+              strokeWidth={2}
+              fill="url(#shortage-fill)"
+              activeDot={{ r: 5, fill: "#ef4444", stroke: "var(--card)", strokeWidth: 2 }}
+            />
+          </AreaChart>
+        </ChartContainer>
+      )}
+    </section>
+  );
+}
+
+function ShortageTrendTooltip({
+  active,
+  label,
+  payload,
+}: {
+  active?: boolean;
+  label?: string;
+  payload?: Array<{ value?: number }>;
+}) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-md border border-border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md">
+      <p className="font-medium">Дата: {formatTrendDate(label ?? "")}</p>
+      <p className="mt-1 text-muted-foreground">
+        Сумма недостач: {formatMoney(Number(payload[0]?.value ?? 0))} BYN
+      </p>
+    </div>
+  );
+}
+
+function formatShortDate(value: string) {
+  return formatTrendDate(value, { day: "2-digit", month: "2-digit" });
+}
+
+function formatTrendDate(value: string, options?: Intl.DateTimeFormatOptions) {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("ru-RU", options ?? { day: "2-digit", month: "long" });
 }
 
 function MetricCard({

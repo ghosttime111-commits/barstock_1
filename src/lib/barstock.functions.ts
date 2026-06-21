@@ -717,6 +717,23 @@ export const archiveProductFn = createServerFn({ method: "POST" })
     return product;
   });
 
+export const restoreProductFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireAccountingAccess(ctx);
+
+    const { getBarstock } = await import("./barstock.server");
+    const { data: product, error } = await getBarstock()
+      .from("products")
+      .update({ status: "approved" })
+      .eq("id", data.id)
+      .select("id,name,category_id,unit,status,unit_price,area")
+      .single();
+    if (error) throw new Error(error.message);
+    return product;
+  });
+
 export const deleteProductFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {

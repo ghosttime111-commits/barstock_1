@@ -1,12 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Building2, Package, Save, Tags, Trash2, UserPlus } from "lucide-react";
+import { Archive, Building2, Package, RotateCcw, Save, Tags, Trash2, UserPlus } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   archiveProductFn,
   createBartenderFn,
@@ -21,6 +22,7 @@ import {
   listCategoriesFn,
   listProductsFn,
   listRestaurantsFn,
+  restoreProductFn,
   updateBartenderRestaurantFn,
   updateCategoryFn,
   updateProductFn,
@@ -50,6 +52,7 @@ type Bartender = {
 type Category = { id: string; name: string; area?: ProductArea | string | null };
 type ProductUnit = "л" | "кг" | "шт" | "бут";
 type ProductStatus = "approved" | "pending" | "archived";
+type ProductStatusFilter = "active" | "archived" | "all";
 type Product = {
   id: string;
   name: string;
@@ -130,6 +133,7 @@ function AdminPage() {
   const createProduct = useServerFn(createProductFn);
   const updateProduct = useServerFn(updateProductFn);
   const archiveProduct = useServerFn(archiveProductFn);
+  const restoreProduct = useServerFn(restoreProductFn);
   const deleteProduct = useServerFn(deleteProductFn);
 
   const [restaurantName, setRestaurantName] = useState("");
@@ -148,6 +152,8 @@ function AdminPage() {
   const [categoryAreaFilter, setCategoryAreaFilter] = useState<"all" | ProductArea>("all");
   const [productSearch, setProductSearch] = useState("");
   const [productCategoryFilter, setProductCategoryFilter] = useState("all");
+  const [productAreaFilter, setProductAreaFilter] = useState<"all" | ProductArea>("all");
+  const [productStatusFilter, setProductStatusFilter] = useState<ProductStatusFilter>("active");
   const [productDeleteMessage, setProductDeleteMessage] = useState<string | null>(null);
   const [productDrafts, setProductDrafts] = useState<Record<string, ProductDraft>>({});
   const [newProduct, setNewProduct] = useState<ProductDraft>({
@@ -216,13 +222,19 @@ function AdminPage() {
   const filteredProducts = useMemo(() => {
     const search = productSearch.trim().toLowerCase();
     return products.filter((product) => {
+      const isArchived = product.status === "archived";
+      if (productStatusFilter === "active" && isArchived) return false;
+      if (productStatusFilter === "archived" && !isArchived) return false;
+      if (productAreaFilter !== "all" && (product.area ?? "bar") !== productAreaFilter) {
+        return false;
+      }
       if (productCategoryFilter !== "all" && product.category_id !== productCategoryFilter) {
         return false;
       }
       if (search && !product.name.toLowerCase().includes(search)) return false;
       return true;
     });
-  }, [productCategoryFilter, productSearch, products]);
+  }, [productAreaFilter, productCategoryFilter, productSearch, productStatusFilter, products]);
 
   const refreshAdminData = async () => {
     await Promise.all([
@@ -345,6 +357,10 @@ function AdminPage() {
   });
   const archiveProductMutation = useMutation({
     mutationFn: (id: string) => archiveProduct({ data: { id, session_token: sessionToken! } }),
+    onSuccess: refreshAdminData,
+  });
+  const restoreProductMutation = useMutation({
+    mutationFn: (id: string) => restoreProduct({ data: { id, session_token: sessionToken! } }),
     onSuccess: refreshAdminData,
   });
   const deleteProductMutation = useMutation({
@@ -770,30 +786,70 @@ function AdminPage() {
         <ErrorText error={createProductMutation.error} fallback="Не удалось создать товар" />
         <ErrorText error={updateProductMutation.error} fallback="Не удалось сохранить товар" />
         <ErrorText error={archiveProductMutation.error} fallback="Не удалось архивировать товар" />
+        <ErrorText error={restoreProductMutation.error} fallback="Не удалось восстановить товар" />
         <ErrorText error={deleteProductMutation.error} fallback="Не удалось удалить товар" />
         {productDeleteMessage && (
           <p className="mb-3 text-sm text-muted-foreground">{productDeleteMessage}</p>
         )}
 
-        <div className="mb-3 flex flex-col gap-2 sm:flex-row">
-          <Input
-            value={productSearch}
-            onChange={(event) => setProductSearch(event.target.value)}
-            placeholder="Поиск по названию"
-            className="sm:max-w-sm"
-          />
-          <select
-            value={productCategoryFilter}
-            onChange={(event) => setProductCategoryFilter(event.target.value)}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+        <div className="mb-3 flex flex-col gap-2">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            value={productStatusFilter}
+            onValueChange={(value) => {
+              if (value) setProductStatusFilter(value as ProductStatusFilter);
+            }}
+            className="w-full justify-start overflow-x-auto sm:w-auto"
+            aria-label="Фильтр статуса товаров"
           >
-            <option value="all">Все категории</option>
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
+            <ToggleGroupItem value="active" className="px-3">
+              Активные
+            </ToggleGroupItem>
+            <ToggleGroupItem value="archived" className="px-3">
+              Архив
+            </ToggleGroupItem>
+            <ToggleGroupItem value="all" className="px-3">
+              Все
+            </ToggleGroupItem>
+          </ToggleGroup>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              value={productSearch}
+              onChange={(event) => setProductSearch(event.target.value)}
+              placeholder="Поиск по названию"
+              className="sm:max-w-sm"
+            />
+            <select
+              value={productAreaFilter}
+              onChange={(event) => {
+                setProductAreaFilter(event.target.value as "all" | ProductArea);
+                setProductCategoryFilter("all");
+              }}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="all">Все зоны</option>
+              <option value="bar">Бар</option>
+              <option value="kitchen">Кухня</option>
+            </select>
+            <select
+              value={productCategoryFilter}
+              onChange={(event) => setProductCategoryFilter(event.target.value)}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="all">Все категории</option>
+              {categories
+                .filter(
+                  (category) =>
+                    productAreaFilter === "all" || (category.area ?? "bar") === productAreaFilter,
+                )
+                .map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+            </select>
+          </div>
         </div>
 
         <div className="overflow-x-auto rounded-lg border border-border">
@@ -857,10 +913,14 @@ function AdminPage() {
                       />
                     </td>
                     <td className="px-3 py-2">
-                      <StatusSelect
-                        value={draft.status}
-                        onChange={(value) => setProductDraft(product.id, { status: value })}
-                      />
+                      {product.status === "archived" ? (
+                        <span className="whitespace-nowrap text-muted-foreground">В архиве</span>
+                      ) : (
+                        <StatusSelect
+                          value={draft.status}
+                          onChange={(value) => setProductDraft(product.id, { status: value })}
+                        />
+                      )}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex min-w-56 gap-2">
@@ -877,18 +937,29 @@ function AdminPage() {
                           <Save className="size-4" />
                           Сохранить
                         </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          disabled={
-                            product.status === "archived" || archiveProductMutation.isPending
-                          }
-                          onClick={() => archiveProductMutation.mutate(product.id)}
-                        >
-                          <Archive className="size-4" />
-                          Архив
-                        </Button>
+                        {product.status === "archived" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            disabled={restoreProductMutation.isPending}
+                            onClick={() => restoreProductMutation.mutate(product.id)}
+                          >
+                            <RotateCcw className="size-4" />
+                            Восстановить
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            disabled={archiveProductMutation.isPending}
+                            onClick={() => archiveProductMutation.mutate(product.id)}
+                          >
+                            <Archive className="size-4" />
+                            Архив
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           size="sm"
@@ -906,7 +977,7 @@ function AdminPage() {
               })}
               {filteredProducts.length === 0 && (
                 <tr>
-                  <td className="px-3 py-6 text-center text-muted-foreground" colSpan={5}>
+                  <td className="px-3 py-6 text-center text-muted-foreground" colSpan={7}>
                     Товары не найдены.
                   </td>
                 </tr>

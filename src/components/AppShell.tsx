@@ -9,6 +9,7 @@ import {
   Menu,
   ReceiptText,
   Settings,
+  ShieldCheck,
   Wine,
   type LucideIcon,
 } from "lucide-react";
@@ -33,7 +34,13 @@ export type AllowedRole =
   | "manager"
   | "super_admin";
 
-type NavigationPath = "/inventories" | "/reports" | "/write-offs" | "/admin" | "/manager";
+type NavigationPath =
+  | "/inventories"
+  | "/reports"
+  | "/write-offs"
+  | "/admin"
+  | "/manager"
+  | "/security";
 type NavigationItem = { label: string; to: NavigationPath; icon: LucideIcon };
 
 const inventoriesItem: NavigationItem = {
@@ -49,13 +56,18 @@ const writeOffsItem: NavigationItem = {
 };
 const adminItem: NavigationItem = { label: "Управление", to: "/admin", icon: Settings };
 const managerItem: NavigationItem = { label: "Статистика", to: "/manager", icon: BarChart3 };
+const securityItem: NavigationItem = {
+  label: "Журнал входов",
+  to: "/security",
+  icon: ShieldCheck,
+};
 
 const navigationByRole: Record<AllowedRole, NavigationItem[]> = {
   bartender: [inventoriesItem, writeOffsItem],
   kitchen_manager: [inventoriesItem, writeOffsItem],
   accountant: [reportsItem, writeOffsItem, adminItem, managerItem],
   manager: [managerItem],
-  super_admin: [adminItem, reportsItem, writeOffsItem, managerItem],
+  super_admin: [adminItem, reportsItem, writeOffsItem, managerItem, securityItem],
 };
 
 function homePathForRole(role: string) {

@@ -55,6 +55,13 @@ type InventoryRow = {
   correction_comment?: string | null;
 };
 
+type LoginEventUser = {
+  id: string;
+  name: string;
+  role: string;
+  restaurant_id: string | null;
+};
+
 function getSessionSecret() {
   const secret = process.env.BARSTOCK_SESSION_SECRET;
   if (!secret || secret.length < 32) {
@@ -142,6 +149,34 @@ async function loadRestaurant(
   return data ?? null;
 }
 
+async function recordLoginEvent(
+  sb: ReturnType<typeof import("./barstock.server").getBarstock>,
+  input: {
+    login: string;
+    success: boolean;
+    failure_reason?: string | null;
+    user?: LoginEventUser | null;
+  },
+) {
+  try {
+    const { getRequestHeader } = await import("@tanstack/react-start/server");
+    const userAgent = getRequestHeader("user-agent")?.slice(0, 1000) ?? null;
+    const { error } = await sb.from("login_events").insert({
+      user_id: input.user?.id ?? null,
+      login: input.login,
+      user_name: input.user?.name ?? null,
+      role: input.user?.role ?? null,
+      restaurant_id: input.user?.restaurant_id ?? null,
+      success: input.success,
+      failure_reason: input.failure_reason ?? null,
+      user_agent: userAgent,
+    });
+    if (error) console.error("Failed to record login event", error.message);
+  } catch (error) {
+    console.error("Failed to record login event", error);
+  }
+}
+
 async function requireSession(sessionToken: string): Promise<AuthContext> {
   const { getBarstock } = await import("./barstock.server");
   const sb = getBarstock();
@@ -216,8 +251,44 @@ export const loginFn = createServerFn({ method: "POST" })
       .eq("login", data.login)
       .maybeSingle();
 
-    if (error) throw new Error(error.message);
-    if (!user || user.is_active === false || !verifyPassword(data.password, user.password_hash)) {
+    if (error) {
+      await recordLoginEvent(sb, {
+        login: data.login,
+        success: false,
+        failure_reason: "database_error",
+      });
+      throw new Error(error.message);
+    }
+    if (!user) {
+      await recordLoginEvent(sb, {
+        login: data.login,
+        success: false,
+        failure_reason: "user_not_found",
+      });
+      throw new Error("Неверный логин или пароль");
+    }
+    const eventUser: LoginEventUser = {
+      id: user.id,
+      name: user.name,
+      role: user.role,
+      restaurant_id: user.restaurant_id,
+    };
+    if (user.is_active === false) {
+      await recordLoginEvent(sb, {
+        login: data.login,
+        success: false,
+        failure_reason: "inactive_user",
+        user: eventUser,
+      });
+      throw new Error("Неверный логин или пароль");
+    }
+    if (!verifyPassword(data.password, user.password_hash)) {
+      await recordLoginEvent(sb, {
+        login: data.login,
+        success: false,
+        failure_reason: "invalid_password",
+        user: eventUser,
+      });
       throw new Error("Неверный логин или пароль");
     }
 
@@ -227,6 +298,12 @@ export const loginFn = createServerFn({ method: "POST" })
         .update({ password_hash: hashPassword(data.password) })
         .eq("id", user.id);
     }
+
+    await recordLoginEvent(sb, {
+      login: data.login,
+      success: true,
+      user: eventUser,
+    });
 
     return {
       user: {
@@ -239,6 +316,53 @@ export const loginFn = createServerFn({ method: "POST" })
       restaurant: await loadRestaurant(sb, user.restaurant_id),
       session_token: createSessionToken(user.id),
     };
+  });
+
+export const listLoginEventsFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        period: z.enum(["today", "7days", "month"]).default("7days"),
+        status: z.enum(["all", "success", "failure"]).default("all"),
+        role: staffRoleSchema.nullable().optional(),
+        search: z.string().trim().max(120).default(""),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "super_admin");
+
+    const now = new Date();
+    const periodStart = new Date(now);
+    if (data.period === "today") periodStart.setUTCHours(0, 0, 0, 0);
+    if (data.period === "7days") periodStart.setUTCDate(periodStart.getUTCDate() - 7);
+    if (data.period === "month") {
+      periodStart.setUTCDate(1);
+      periodStart.setUTCHours(0, 0, 0, 0);
+    }
+
+    const { getBarstock } = await import("./barstock.server");
+    let query = getBarstock()
+      .from("login_events")
+      .select(
+        "id,user_id,login,user_name,role,restaurant_id,success,failure_reason,user_agent,created_at,restaurants(name)",
+      )
+      .gte("created_at", periodStart.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (data.status === "success") query = query.eq("success", true);
+    if (data.status === "failure") query = query.eq("success", false);
+    if (data.role) query = query.eq("role", data.role);
+    const safeSearch = data.search.replace(/[^\p{L}\p{N}@._ -]/gu, "").trim();
+    if (safeSearch) {
+      query = query.or(`login.ilike.%${safeSearch}%,user_name.ilike.%${safeSearch}%`);
+    }
+
+    const { data: rows, error } = await query;
+    if (error) throw new Error(error.message);
+    return rows ?? [];
   });
 
 export const currentSessionFn = createServerFn({ method: "POST" })

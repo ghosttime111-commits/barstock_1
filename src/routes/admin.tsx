@@ -7,6 +7,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   createBartenderFn,
@@ -69,7 +70,11 @@ type ProductDraft = {
   area: ProductArea;
 };
 type ProductChange = { id: string; draft: ProductDraft };
-type ProductSaveError = Error & { savedIds?: string[] };
+type StaffDraft = { role: StaffRole; restaurant_id: string; is_active: boolean };
+type StaffChange = { id: string; draft: StaffDraft };
+type CategoryDraft = { name: string; area: ProductArea };
+type CategoryChange = { id: string; draft: CategoryDraft };
+type BatchSaveError = Error & { savedIds?: string[] };
 
 const productUnits: ProductUnit[] = ["л", "кг", "шт", "бут"];
 const productStatuses: ProductStatus[] = ["approved", "pending", "archived"];
@@ -137,6 +142,52 @@ function productDraftsEqual(left: ProductDraft, right: ProductDraft) {
   );
 }
 
+function staffDraftFromStaff(staff: Bartender): StaffDraft {
+  return {
+    role: staff.role as StaffRole,
+    restaurant_id: staff.restaurant_id ?? "",
+    is_active: staff.is_active !== false,
+  };
+}
+
+function staffDraftsEqual(left: StaffDraft, right: StaffDraft) {
+  return (
+    left.role === right.role &&
+    left.restaurant_id === right.restaurant_id &&
+    left.is_active === right.is_active
+  );
+}
+
+function categoryDraftFromCategory(category: Category): CategoryDraft {
+  return {
+    name: category.name,
+    area: category.area === "kitchen" ? "kitchen" : "bar",
+  };
+}
+
+function categoryDraftsEqual(left: CategoryDraft, right: CategoryDraft) {
+  return left.name === right.name && left.area === right.area;
+}
+
+function batchSaveResult<T extends { id: string }>(
+  changes: T[],
+  results: PromiseSettledResult<unknown>[],
+  entityLabel: string,
+) {
+  const savedIds = changes
+    .filter((_, index) => results[index].status === "fulfilled")
+    .map(({ id }) => id);
+  const failedCount = results.filter((result) => result.status === "rejected").length;
+  if (failedCount > 0) {
+    const error = new Error(
+      `Не удалось сохранить ${failedCount} ${entityLabel}(а). Остальные изменения сохранены.`,
+    ) as BatchSaveError;
+    error.savedIds = savedIds;
+    throw error;
+  }
+  return { savedIds };
+}
+
 function AdminPage() {
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
@@ -166,13 +217,13 @@ function AdminPage() {
   const [bartenderPassword, setBartenderPassword] = useState("");
   const [bartenderRole, setBartenderRole] = useState<StaffRole>("bartender");
   const [bartenderRestaurantId, setBartenderRestaurantId] = useState("");
-  const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [staffDrafts, setStaffDrafts] = useState<Record<string, StaffDraft>>({});
   const [bartenderAssignmentMessage, setBartenderAssignmentMessage] = useState<string | null>(null);
   const [staffActionMessage, setStaffActionMessage] = useState<string | null>(null);
   const [categoryName, setCategoryName] = useState("");
   const [categoryArea, setCategoryArea] = useState<ProductArea>("bar");
-  const [categoryNames, setCategoryNames] = useState<Record<string, string>>({});
-  const [categoryAreas, setCategoryAreas] = useState<Record<string, ProductArea>>({});
+  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, CategoryDraft>>({});
+  const [categorySaveMessage, setCategorySaveMessage] = useState<string | null>(null);
   const [categoryAreaFilter, setCategoryAreaFilter] = useState<"all" | ProductArea>("all");
   const [productSearch, setProductSearch] = useState("");
   const [productCategoryFilter, setProductCategoryFilter] = useState("all");
@@ -304,21 +355,45 @@ function AdminPage() {
       await refreshAdminData();
     },
   });
-  const updateBartenderMutation = useMutation({
-    mutationFn: ({ id, restaurantId }: { id: string; restaurantId: string | null }) =>
-      updateBartenderRestaurant({
-        data: { id, restaurant_id: restaurantId, session_token: sessionToken! },
-      }),
-    onSuccess: async () => {
+  const saveStaffMutation = useMutation({
+    mutationFn: async (changes: StaffChange[]) => {
+      const results = await Promise.allSettled(
+        changes.map(({ id, draft }) =>
+          updateBartenderRestaurant({
+            data: {
+              id,
+              role: draft.role,
+              restaurant_id: draft.restaurant_id || null,
+              is_active: draft.is_active,
+              session_token: sessionToken!,
+            },
+          }),
+        ),
+      );
+      return batchSaveResult(changes, results, "сотрудник");
+    },
+    onSuccess: async ({ savedIds }, changes) => {
+      clearSavedStaffDrafts(changes, savedIds);
       setBartenderAssignmentMessage(
         "Пользователю нужно войти заново, чтобы увидеть новый ресторан",
       );
-      await refreshAdminData();
+      setStaffActionMessage("Изменения сохранены");
+      await queryClient.invalidateQueries({ queryKey: ["bartenders"] });
+    },
+    onError: async (error, changes) => {
+      clearSavedStaffDrafts(changes, (error as BatchSaveError).savedIds ?? []);
+      setStaffActionMessage(null);
+      await queryClient.invalidateQueries({ queryKey: ["bartenders"] });
     },
   });
   const deleteBartenderMutation = useMutation({
     mutationFn: (id: string) => deleteBartender({ data: { id, session_token: sessionToken! } }),
-    onSuccess: async () => {
+    onSuccess: async (_, id) => {
+      setStaffDrafts((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       setStaffActionMessage("Сотрудник удалён");
       await refreshAdminData();
     },
@@ -337,14 +412,43 @@ function AdminPage() {
       await refreshAdminData();
     },
   });
-  const updateCategoryMutation = useMutation({
-    mutationFn: ({ id, name, area }: { id: string; name: string; area: ProductArea }) =>
-      updateCategory({ data: { id, name: name.trim(), area, session_token: sessionToken! } }),
-    onSuccess: refreshAdminData,
+  const saveCategoriesMutation = useMutation({
+    mutationFn: async (changes: CategoryChange[]) => {
+      const results = await Promise.allSettled(
+        changes.map(({ id, draft }) =>
+          updateCategory({
+            data: {
+              id,
+              name: draft.name.trim(),
+              area: draft.area,
+              session_token: sessionToken!,
+            },
+          }),
+        ),
+      );
+      return batchSaveResult(changes, results, "категори");
+    },
+    onSuccess: async ({ savedIds }, changes) => {
+      clearSavedCategoryDrafts(changes, savedIds);
+      setCategorySaveMessage("Изменения сохранены");
+      await queryClient.invalidateQueries({ queryKey: ["categories"] });
+    },
+    onError: async (error, changes) => {
+      clearSavedCategoryDrafts(changes, (error as BatchSaveError).savedIds ?? []);
+      setCategorySaveMessage(null);
+      await queryClient.invalidateQueries({ queryKey: ["categories"] });
+    },
   });
   const deleteCategoryMutation = useMutation({
     mutationFn: (id: string) => deleteCategory({ data: { id, session_token: sessionToken! } }),
-    onSuccess: refreshAdminData,
+    onSuccess: async (_, id) => {
+      setCategoryDrafts((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      await refreshAdminData();
+    },
   });
   const createProductMutation = useMutation({
     mutationFn: () =>
@@ -392,7 +496,7 @@ function AdminPage() {
           .join(", ");
         const error = new Error(
           `Не удалось сохранить ${failedChanges.length} товар(а): ${failedNames}`,
-        ) as ProductSaveError;
+        ) as BatchSaveError;
         error.savedIds = savedIds;
         throw error;
       }
@@ -405,7 +509,7 @@ function AdminPage() {
       await queryClient.invalidateQueries({ queryKey: ["products"] });
     },
     onError: async (error, changes) => {
-      clearSavedProductDrafts(changes, (error as ProductSaveError).savedIds ?? []);
+      clearSavedProductDrafts(changes, (error as BatchSaveError).savedIds ?? []);
       setProductSaveMessage(null);
       await queryClient.invalidateQueries({ queryKey: ["products"] });
     },
@@ -422,6 +526,87 @@ function AdminPage() {
       await refreshAdminData();
     },
   });
+
+  function staffDraft(staff: Bartender): StaffDraft {
+    return staffDrafts[staff.id] ?? staffDraftFromStaff(staff);
+  }
+
+  function setStaffDraft(id: string, patch: Partial<StaffDraft>) {
+    const staff = bartenders.find((item) => item.id === id);
+    if (!staff) return;
+    setStaffActionMessage(null);
+    setBartenderAssignmentMessage(null);
+    setStaffDrafts((prev) => {
+      const original = staffDraftFromStaff(staff);
+      const nextDraft = { ...(prev[id] ?? original), ...patch };
+      const next = { ...prev };
+      if (staffDraftsEqual(nextDraft, original)) delete next[id];
+      else next[id] = nextDraft;
+      return next;
+    });
+  }
+
+  function clearSavedStaffDrafts(changes: StaffChange[], savedIds: string[]) {
+    const savedIdSet = new Set(savedIds);
+    setStaffDrafts((prev) => {
+      const next = { ...prev };
+      for (const change of changes) {
+        if (
+          savedIdSet.has(change.id) &&
+          next[change.id] &&
+          staffDraftsEqual(next[change.id], change.draft)
+        ) {
+          delete next[change.id];
+        }
+      }
+      return next;
+    });
+  }
+
+  function saveStaffChanges() {
+    const changes = Object.entries(staffDrafts).map(([id, draft]) => ({ id, draft }));
+    if (changes.length > 0) saveStaffMutation.mutate(changes);
+  }
+
+  function categoryDraft(category: Category): CategoryDraft {
+    return categoryDrafts[category.id] ?? categoryDraftFromCategory(category);
+  }
+
+  function setCategoryDraft(id: string, patch: Partial<CategoryDraft>) {
+    const category = categories.find((item) => item.id === id);
+    if (!category) return;
+    setCategorySaveMessage(null);
+    setCategoryDrafts((prev) => {
+      const original = categoryDraftFromCategory(category);
+      const nextDraft = { ...(prev[id] ?? original), ...patch };
+      const next = { ...prev };
+      if (categoryDraftsEqual(nextDraft, original)) delete next[id];
+      else next[id] = nextDraft;
+      return next;
+    });
+  }
+
+  function clearSavedCategoryDrafts(changes: CategoryChange[], savedIds: string[]) {
+    const savedIdSet = new Set(savedIds);
+    setCategoryDrafts((prev) => {
+      const next = { ...prev };
+      for (const change of changes) {
+        if (
+          savedIdSet.has(change.id) &&
+          next[change.id] &&
+          categoryDraftsEqual(next[change.id], change.draft)
+        ) {
+          delete next[change.id];
+        }
+      }
+      return next;
+    });
+  }
+
+  function saveCategoryChanges() {
+    const changes = Object.entries(categoryDrafts).map(([id, draft]) => ({ id, draft }));
+    if (changes.length > 0) saveCategoriesMutation.mutate(changes);
+  }
 
   function productDraft(product: Product): ProductDraft {
     return productDrafts[product.id] ?? productDraftFromProduct(product);
@@ -604,8 +789,8 @@ function AdminPage() {
         </form>
         <ErrorText error={createBartenderMutation.error} fallback="Не удалось создать сотрудника" />
         <ErrorText
-          error={updateBartenderMutation.error}
-          fallback="Не удалось изменить ресторан сотрудника"
+          error={saveStaffMutation.error}
+          fallback="Не удалось сохранить изменения сотрудников"
         />
         {bartenderAssignmentMessage && (
           <p className="mb-3 text-sm text-muted-foreground">{bartenderAssignmentMessage}</p>
@@ -614,6 +799,21 @@ function AdminPage() {
         {staffActionMessage && (
           <p className="mb-3 text-sm text-muted-foreground">{staffActionMessage}</p>
         )}
+        <div className="mb-3 flex flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-muted-foreground">
+            Несохранённых изменений: {Object.keys(staffDrafts).length}
+          </p>
+          <Button
+            type="button"
+            disabled={Object.keys(staffDrafts).length === 0 || saveStaffMutation.isPending}
+            onClick={saveStaffChanges}
+          >
+            <Save className="size-4" />
+            {saveStaffMutation.isPending
+              ? "Сохранение..."
+              : `Сохранить изменения (${Object.keys(staffDrafts).length})`}
+          </Button>
+        </div>
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-sm">
             <thead className="text-xs uppercase text-muted-foreground">
@@ -631,19 +831,45 @@ function AdminPage() {
             </thead>
             <tbody>
               {bartenders.map((bartender) => {
-                const selectedRestaurantId =
-                  assignments[bartender.id] ?? bartender.restaurant_id ?? "";
+                const draft = staffDraft(bartender);
                 const canAssignRestaurant = ["bartender", "kitchen_manager", "manager"].includes(
-                  bartender.role,
+                  draft.role,
                 );
+                const canEditRole = isSuperAdmin && bartender.id !== session?.user.id;
+                const canEditActivity = isSuperAdmin
+                  ? bartender.id !== session?.user.id
+                  : ["bartender", "kitchen_manager"].includes(bartender.role);
                 const canDeleteStaff = isSuperAdmin
                   ? bartender.id !== session?.user.id
                   : ["bartender", "kitchen_manager"].includes(bartender.role);
                 return (
-                  <tr key={bartender.id} className="border-b border-border last:border-b-0">
+                  <tr
+                    key={bartender.id}
+                    className={`border-b border-border last:border-b-0 ${
+                      staffDrafts[bartender.id] ? "bg-primary/5" : ""
+                    }`}
+                  >
                     <td className="px-3 py-2 font-medium">{bartender.name}</td>
                     <td className="px-3 py-2">{bartender.login}</td>
-                    <td className="px-3 py-2">{staffRoleLabel(bartender.role)}</td>
+                    <td className="px-3 py-2">
+                      {canEditRole ? (
+                        <StaffRoleSelect
+                          value={draft.role}
+                          roles={superAdminStaffRoles}
+                          onChange={(role) =>
+                            setStaffDraft(bartender.id, {
+                              role,
+                              restaurant_id:
+                                role === "accountant" || role === "super_admin"
+                                  ? ""
+                                  : draft.restaurant_id,
+                            })
+                          }
+                        />
+                      ) : (
+                        staffRoleLabel(bartender.role)
+                      )}
+                    </td>
                     <td className="px-3 py-2">
                       {bartender.restaurant_id
                         ? (restaurantById.get(bartender.restaurant_id) ?? "Не найден")
@@ -652,40 +878,28 @@ function AdminPage() {
                           : "Не назначен"}
                     </td>
                     <td className="px-3 py-2">
-                      {bartender.is_active === false
-                        ? "\u041e\u0442\u043a\u043b\u044e\u0447\u0451\u043d"
-                        : "\u0410\u043a\u0442\u0438\u0432\u0435\u043d"}
+                      <div className="flex min-w-28 items-center gap-2">
+                        <Switch
+                          checked={draft.is_active}
+                          disabled={!canEditActivity}
+                          onCheckedChange={(is_active) =>
+                            setStaffDraft(bartender.id, { is_active })
+                          }
+                          aria-label={`Активность сотрудника ${bartender.name}`}
+                        />
+                        <span>{draft.is_active ? "Активен" : "Отключён"}</span>
+                      </div>
                     </td>
                     <td className="px-3 py-2">
                       {canAssignRestaurant ? (
-                        <div className="flex min-w-64 gap-2">
-                          <RestaurantSelect
-                            value={selectedRestaurantId}
-                            restaurants={restaurants}
-                            allowAll={bartender.role === "manager"}
-                            onChange={(value) =>
-                              setAssignments((prev) => ({ ...prev, [bartender.id]: value }))
-                            }
-                          />
-                          <Button
-                            type="button"
-                            size="sm"
-                            disabled={
-                              (!selectedRestaurantId && bartender.role !== "manager") ||
-                              selectedRestaurantId === (bartender.restaurant_id ?? "") ||
-                              updateBartenderMutation.isPending
-                            }
-                            onClick={() =>
-                              updateBartenderMutation.mutate({
-                                id: bartender.id,
-                                restaurantId: selectedRestaurantId || null,
-                              })
-                            }
-                          >
-                            <Save className="size-4" />
-                            Сохранить
-                          </Button>
-                        </div>
+                        <RestaurantSelect
+                          value={draft.restaurant_id}
+                          restaurants={restaurants}
+                          allowAll={draft.role === "manager"}
+                          onChange={(restaurant_id) =>
+                            setStaffDraft(bartender.id, { restaurant_id })
+                          }
+                        />
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
@@ -730,10 +944,35 @@ function AdminPage() {
           </Button>
         </form>
         <ErrorText error={createCategoryMutation.error} fallback="Не удалось создать категорию" />
-        <ErrorText error={updateCategoryMutation.error} fallback="Не удалось изменить категорию" />
+        <ErrorText
+          error={saveCategoriesMutation.error}
+          fallback="Не удалось сохранить изменения категорий"
+        />
         <ErrorText error={deleteCategoryMutation.error} fallback="Не удалось удалить категорию" />
-        <div className="mb-3 max-w-48">
-          <AreaFilter value={categoryAreaFilter} onChange={setCategoryAreaFilter} />
+        {categorySaveMessage && (
+          <p className="mb-3 text-sm text-muted-foreground">{categorySaveMessage}</p>
+        )}
+        <div className="mb-3 flex flex-col gap-3 border-t border-border pt-3 sm:flex-row sm:items-end sm:justify-between">
+          <div className="max-w-48">
+            <AreaFilter value={categoryAreaFilter} onChange={setCategoryAreaFilter} />
+          </div>
+          <div className="flex flex-col gap-2 sm:items-end">
+            <p className="text-sm text-muted-foreground">
+              Несохранённых изменений: {Object.keys(categoryDrafts).length}
+            </p>
+            <Button
+              type="button"
+              disabled={
+                Object.keys(categoryDrafts).length === 0 || saveCategoriesMutation.isPending
+              }
+              onClick={saveCategoryChanges}
+            >
+              <Save className="size-4" />
+              {saveCategoriesMutation.isPending
+                ? "Сохранение..."
+                : `Сохранить изменения (${Object.keys(categoryDrafts).length})`}
+            </Button>
+          </div>
         </div>
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-sm">
@@ -746,57 +985,38 @@ function AdminPage() {
             </thead>
             <tbody>
               {filteredCategories.map((category) => {
-                const value = categoryNames[category.id] ?? category.name;
-                const area =
-                  categoryAreas[category.id] ?? (category.area === "kitchen" ? "kitchen" : "bar");
+                const draft = categoryDraft(category);
                 return (
-                  <tr key={category.id} className="border-b border-border last:border-b-0">
+                  <tr
+                    key={category.id}
+                    className={`border-b border-border last:border-b-0 ${
+                      categoryDrafts[category.id] ? "bg-primary/5" : ""
+                    }`}
+                  >
                     <td className="px-3 py-2">
                       <Input
-                        value={value}
+                        value={draft.name}
                         onChange={(event) =>
-                          setCategoryNames((prev) => ({
-                            ...prev,
-                            [category.id]: event.target.value,
-                          }))
+                          setCategoryDraft(category.id, { name: event.target.value })
                         }
                         className="min-w-48"
                       />
                     </td>
                     <td className="px-3 py-2">
                       <AreaSelect
-                        value={area}
-                        onChange={(nextArea) =>
-                          setCategoryAreas((prev) => ({ ...prev, [category.id]: nextArea }))
-                        }
+                        value={draft.area}
+                        onChange={(nextArea) => setCategoryDraft(category.id, { area: nextArea })}
                       />
                     </td>
                     <td className="px-3 py-2">
-                      <div className="flex min-w-48 gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          disabled={
-                            !value.trim() ||
-                            (value === category.name && area === (category.area ?? "bar")) ||
-                            updateCategoryMutation.isPending
-                          }
-                          onClick={() =>
-                            updateCategoryMutation.mutate({ id: category.id, name: value, area })
-                          }
-                        >
-                          <Save className="size-4" />
-                          Сохранить
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          disabled={deleteCategoryMutation.isPending}
-                          onClick={() => deleteCategoryMutation.mutate(category.id)}
-                        >
-                          Удалить
-                        </Button>
-                      </div>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={deleteCategoryMutation.isPending}
+                        onClick={() => deleteCategoryMutation.mutate(category.id)}
+                      >
+                        Удалить
+                      </Button>
                     </td>
                   </tr>
                 );

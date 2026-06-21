@@ -420,7 +420,12 @@ export const deleteBartenderFn = createServerFn({ method: "POST" })
 export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
     sessionSchema
-      .extend({ id: z.string().uuid(), restaurant_id: z.string().uuid().nullable() })
+      .extend({
+        id: z.string().uuid(),
+        restaurant_id: z.string().uuid().nullable(),
+        role: staffRoleSchema,
+        is_active: z.boolean(),
+      })
       .parse(input),
   )
   .handler(async ({ data }) => {
@@ -431,16 +436,34 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: bartender, error: bartenderError } = await sb
       .from("users")
-      .select("id,role")
+      .select("id,role,restaurant_id,is_active")
       .eq("id", data.id)
       .maybeSingle();
     if (bartenderError) throw new Error(bartenderError.message);
-    if (!bartender || !["bartender", "kitchen_manager", "manager"].includes(bartender.role))
-      throw new Error("Staff member not found");
-    if (
-      (bartender.role === "bartender" || bartender.role === "kitchen_manager") &&
-      !data.restaurant_id
-    ) {
+    if (!bartender || !staffRoleSchema.safeParse(bartender.role).success) {
+      throw new Error("Сотрудник не найден");
+    }
+    if (ctx.user.id === data.id && (data.role !== bartender.role || !data.is_active)) {
+      throw new Error("Нельзя изменить свою роль или отключить себя");
+    }
+    if (ctx.user.role !== "super_admin") {
+      if (["accountant", "super_admin"].includes(bartender.role)) {
+        throw new Error("Бухгалтер не может изменить этого пользователя");
+      }
+      if (data.role !== bartender.role) {
+        throw new Error("Только администратор системы может изменить роль сотрудника");
+      }
+      if (
+        data.is_active !== (bartender.is_active !== false) &&
+        !["bartender", "kitchen_manager"].includes(bartender.role)
+      ) {
+        throw new Error("Бухгалтер не может изменить активность этого пользователя");
+      }
+    }
+    if (data.role === "super_admin" && ctx.user.role !== "super_admin") {
+      throw new Error("Только администратор системы может назначить эту роль");
+    }
+    if ((data.role === "bartender" || data.role === "kitchen_manager") && !data.restaurant_id) {
       throw new Error("Для этой роли ресторан обязателен");
     }
     if (data.restaurant_id) {
@@ -455,9 +478,13 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
 
     const { data: user, error } = await sb
       .from("users")
-      .update({ restaurant_id: data.restaurant_id })
+      .update({
+        role: data.role,
+        restaurant_id:
+          data.role === "accountant" || data.role === "super_admin" ? null : data.restaurant_id,
+        is_active: data.is_active,
+      })
       .eq("id", data.id)
-      .in("role", ["bartender", "kitchen_manager", "manager"])
       .select("id,name,login,role,restaurant_id,is_active")
       .single();
     if (error) throw new Error(error.message);

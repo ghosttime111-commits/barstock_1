@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Building2, Package, RotateCcw, Save, Tags, Trash2, UserPlus } from "lucide-react";
+import { Building2, Package, RotateCcw, Save, Tags, Trash2, UserPlus } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 
 import { AppShell } from "@/components/AppShell";
@@ -9,14 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
-  archiveProductFn,
   createBartenderFn,
   createCategoryFn,
   createProductFn,
   createRestaurantFn,
   deleteCategoryFn,
   deleteBartenderFn,
-  deleteProductFn,
   deleteRestaurantFn,
   listBartendersFn,
   listCategoriesFn,
@@ -70,6 +68,8 @@ type ProductDraft = {
   unit_price: string;
   area: ProductArea;
 };
+type ProductChange = { id: string; draft: ProductDraft };
+type ProductSaveError = Error & { savedIds?: string[] };
 
 const productUnits: ProductUnit[] = ["л", "кг", "шт", "бут"];
 const productStatuses: ProductStatus[] = ["approved", "pending", "archived"];
@@ -111,6 +111,32 @@ function parseMoneyInput(value: string) {
   return parsed;
 }
 
+function productDraftFromProduct(product: Product): ProductDraft {
+  return {
+    name: product.name,
+    category_id: product.category_id ?? "",
+    unit: productUnits.includes(product.unit as ProductUnit)
+      ? (product.unit as ProductUnit)
+      : "бут",
+    status: productStatuses.includes(product.status as ProductStatus)
+      ? (product.status as ProductStatus)
+      : "pending",
+    unit_price: String(product.unit_price ?? 0),
+    area: product.area === "kitchen" ? "kitchen" : "bar",
+  };
+}
+
+function productDraftsEqual(left: ProductDraft, right: ProductDraft) {
+  return (
+    left.name === right.name &&
+    left.category_id === right.category_id &&
+    left.unit === right.unit &&
+    left.status === right.status &&
+    left.unit_price === right.unit_price &&
+    left.area === right.area
+  );
+}
+
 function AdminPage() {
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
@@ -132,9 +158,7 @@ function AdminPage() {
   const listProducts = useServerFn(listProductsFn);
   const createProduct = useServerFn(createProductFn);
   const updateProduct = useServerFn(updateProductFn);
-  const archiveProduct = useServerFn(archiveProductFn);
   const restoreProduct = useServerFn(restoreProductFn);
-  const deleteProduct = useServerFn(deleteProductFn);
 
   const [restaurantName, setRestaurantName] = useState("");
   const [bartenderName, setBartenderName] = useState("");
@@ -154,7 +178,7 @@ function AdminPage() {
   const [productCategoryFilter, setProductCategoryFilter] = useState("all");
   const [productAreaFilter, setProductAreaFilter] = useState<"all" | ProductArea>("all");
   const [productStatusFilter, setProductStatusFilter] = useState<ProductStatusFilter>("active");
-  const [productDeleteMessage, setProductDeleteMessage] = useState<string | null>(null);
+  const [productSaveMessage, setProductSaveMessage] = useState<string | null>(null);
   const [productDrafts, setProductDrafts] = useState<Record<string, ProductDraft>>({});
   const [newProduct, setNewProduct] = useState<ProductDraft>({
     name: "",
@@ -343,55 +367,103 @@ function AdminPage() {
       await refreshAdminData();
     },
   });
-  const updateProductMutation = useMutation({
-    mutationFn: ({ id, draft }: { id: string; draft: ProductDraft }) =>
-      updateProduct({
-        data: {
-          id,
-          ...draft,
-          unit_price: parseMoneyInput(draft.unit_price),
-          session_token: sessionToken!,
-        },
-      }),
-    onSuccess: refreshAdminData,
-  });
-  const archiveProductMutation = useMutation({
-    mutationFn: (id: string) => archiveProduct({ data: { id, session_token: sessionToken! } }),
-    onSuccess: refreshAdminData,
+  const saveProductsMutation = useMutation({
+    mutationFn: async (changes: ProductChange[]) => {
+      const results = await Promise.allSettled(
+        changes.map(async ({ id, draft }) =>
+          updateProduct({
+            data: {
+              id,
+              ...draft,
+              unit_price: parseMoneyInput(draft.unit_price),
+              session_token: sessionToken!,
+            },
+          }),
+        ),
+      );
+      const savedIds = changes
+        .filter((_, index) => results[index].status === "fulfilled")
+        .map(({ id }) => id);
+      const failedChanges = changes.filter((_, index) => results[index].status === "rejected");
+
+      if (failedChanges.length > 0) {
+        const failedNames = failedChanges
+          .map(({ draft }) => draft.name.trim() || "Без названия")
+          .join(", ");
+        const error = new Error(
+          `Не удалось сохранить ${failedChanges.length} товар(а): ${failedNames}`,
+        ) as ProductSaveError;
+        error.savedIds = savedIds;
+        throw error;
+      }
+
+      return { savedIds };
+    },
+    onSuccess: async ({ savedIds }, changes) => {
+      clearSavedProductDrafts(changes, savedIds);
+      setProductSaveMessage("Изменения сохранены");
+      await queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: async (error, changes) => {
+      clearSavedProductDrafts(changes, (error as ProductSaveError).savedIds ?? []);
+      setProductSaveMessage(null);
+      await queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
   });
   const restoreProductMutation = useMutation({
     mutationFn: (id: string) => restoreProduct({ data: { id, session_token: sessionToken! } }),
-    onSuccess: refreshAdminData,
-  });
-  const deleteProductMutation = useMutation({
-    mutationFn: (id: string) => deleteProduct({ data: { id, session_token: sessionToken! } }),
-    onSuccess: async (result) => {
-      setProductDeleteMessage(result.message);
+    onSuccess: async (_, id) => {
+      setProductDrafts((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setProductSaveMessage("Товар восстановлен");
       await refreshAdminData();
     },
   });
 
   function productDraft(product: Product): ProductDraft {
-    return (
-      productDrafts[product.id] ?? {
-        name: product.name,
-        category_id: product.category_id ?? "",
-        unit: productUnits.includes(product.unit as ProductUnit)
-          ? (product.unit as ProductUnit)
-          : "бут",
-        status: productStatuses.includes(product.status as ProductStatus)
-          ? (product.status as ProductStatus)
-          : "pending",
-        unit_price: String(product.unit_price ?? 0),
-        area: product.area === "kitchen" ? "kitchen" : "bar",
-      }
-    );
+    return productDrafts[product.id] ?? productDraftFromProduct(product);
   }
 
   function setProductDraft(id: string, patch: Partial<ProductDraft>) {
     const product = products.find((item) => item.id === id);
     if (!product) return;
-    setProductDrafts((prev) => ({ ...prev, [id]: { ...productDraft(product), ...patch } }));
+    setProductSaveMessage(null);
+    setProductDrafts((prev) => {
+      const original = productDraftFromProduct(product);
+      const nextDraft = { ...(prev[id] ?? original), ...patch };
+      const next = { ...prev };
+      if (productDraftsEqual(nextDraft, original)) {
+        delete next[id];
+      } else {
+        next[id] = nextDraft;
+      }
+      return next;
+    });
+  }
+
+  function clearSavedProductDrafts(changes: ProductChange[], savedIds: string[]) {
+    const savedIdSet = new Set(savedIds);
+    setProductDrafts((prev) => {
+      const next = { ...prev };
+      for (const change of changes) {
+        if (
+          savedIdSet.has(change.id) &&
+          next[change.id] &&
+          productDraftsEqual(next[change.id], change.draft)
+        ) {
+          delete next[change.id];
+        }
+      }
+      return next;
+    });
+  }
+
+  function saveProductChanges() {
+    const changes = Object.entries(productDrafts).map(([id, draft]) => ({ id, draft }));
+    if (changes.length > 0) saveProductsMutation.mutate(changes);
   }
 
   function submitRestaurant(event: FormEvent<HTMLFormElement>) {
@@ -432,12 +504,6 @@ function AdminPage() {
   function confirmDeleteRestaurant(id: string, name: string) {
     if (!window.confirm(`Удалить ресторан "${name}"?`)) return;
     deleteRestaurantMutation.mutate(id);
-  }
-
-  function confirmDeleteProduct(id: string, name: string) {
-    if (!window.confirm(`Удалить товар "${name}"?`)) return;
-    setProductDeleteMessage(null);
-    deleteProductMutation.mutate(id);
   }
 
   return (
@@ -784,12 +850,10 @@ function AdminPage() {
           </Button>
         </form>
         <ErrorText error={createProductMutation.error} fallback="Не удалось создать товар" />
-        <ErrorText error={updateProductMutation.error} fallback="Не удалось сохранить товар" />
-        <ErrorText error={archiveProductMutation.error} fallback="Не удалось архивировать товар" />
+        <ErrorText error={saveProductsMutation.error} fallback="Не удалось сохранить изменения" />
         <ErrorText error={restoreProductMutation.error} fallback="Не удалось восстановить товар" />
-        <ErrorText error={deleteProductMutation.error} fallback="Не удалось удалить товар" />
-        {productDeleteMessage && (
-          <p className="mb-3 text-sm text-muted-foreground">{productDeleteMessage}</p>
+        {productSaveMessage && (
+          <p className="mb-3 text-sm text-muted-foreground">{productSaveMessage}</p>
         )}
 
         <div className="mb-3 flex flex-col gap-2">
@@ -850,6 +914,21 @@ function AdminPage() {
                 ))}
             </select>
           </div>
+          <div className="flex flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground">
+              {Object.keys(productDrafts).length > 0
+                ? `Есть несохранённые изменения: ${Object.keys(productDrafts).length}`
+                : "Все изменения сохранены"}
+            </p>
+            <Button
+              type="button"
+              disabled={Object.keys(productDrafts).length === 0 || saveProductsMutation.isPending}
+              onClick={saveProductChanges}
+            >
+              <Save className="size-4" />
+              {saveProductsMutation.isPending ? "Сохранение..." : "Сохранить изменения"}
+            </Button>
+          </div>
         </div>
 
         <div className="overflow-x-auto rounded-lg border border-border">
@@ -869,7 +948,12 @@ function AdminPage() {
               {filteredProducts.map((product) => {
                 const draft = productDraft(product);
                 return (
-                  <tr key={product.id} className="border-b border-border last:border-b-0">
+                  <tr
+                    key={product.id}
+                    className={`border-b border-border last:border-b-0 ${
+                      productDrafts[product.id] ? "bg-primary/5" : ""
+                    }`}
+                  >
                     <td className="px-3 py-2">
                       <Input
                         value={draft.name}
@@ -923,21 +1007,8 @@ function AdminPage() {
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      <div className="flex min-w-56 gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={
-                            !draft.name.trim() ||
-                            !draft.category_id ||
-                            updateProductMutation.isPending
-                          }
-                          onClick={() => updateProductMutation.mutate({ id: product.id, draft })}
-                        >
-                          <Save className="size-4" />
-                          Сохранить
-                        </Button>
-                        {product.status === "archived" ? (
+                      <div className="flex min-w-32 gap-2">
+                        {product.status === "archived" && (
                           <Button
                             type="button"
                             size="sm"
@@ -948,28 +1019,7 @@ function AdminPage() {
                             <RotateCcw className="size-4" />
                             Восстановить
                           </Button>
-                        ) : (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            disabled={archiveProductMutation.isPending}
-                            onClick={() => archiveProductMutation.mutate(product.id)}
-                          >
-                            <Archive className="size-4" />
-                            Архив
-                          </Button>
                         )}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="destructive"
-                          disabled={deleteProductMutation.isPending}
-                          onClick={() => confirmDeleteProduct(product.id, product.name)}
-                        >
-                          <Trash2 className="size-4" />
-                          Удалить
-                        </Button>
                       </div>
                     </td>
                   </tr>

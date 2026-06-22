@@ -9,7 +9,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { createWriteOffFn, listWriteOffsFn } from "@/lib/barstock.functions";
+import {
+  createWriteOffFn,
+  listRestaurantNetworksFn,
+  listWriteOffsFn,
+} from "@/lib/barstock.functions";
 import { exportWriteOffsToExcel } from "@/lib/exportWriteOffsToExcel";
 import { formatMoney } from "@/lib/formatMoney";
 import { formatQuantity } from "@/lib/formatQuantity";
@@ -32,19 +36,29 @@ function currentMonth() {
 function WriteOffsPage() {
   const { session } = useSession();
   const listWriteOffs = useServerFn(listWriteOffsFn);
+  const listNetworks = useServerFn(listRestaurantNetworksFn);
   const sessionToken = session?.session_token ?? null;
   const isAccountant = session?.user.role === "accountant" || session?.user.role === "super_admin";
   const [month, setMonth] = useState(currentMonth());
   const [restaurantId, setRestaurantId] = useState("all");
   const [area, setArea] = useState("all");
+  const [networkId, setNetworkId] = useState("all");
+  const isSuperAdmin = session?.user.role === "super_admin";
+
+  const { data: networks = [] } = useQuery({
+    queryKey: ["restaurant-networks"],
+    queryFn: () => listNetworks({ data: { session_token: sessionToken! } }),
+    enabled: !!sessionToken && isSuperAdmin,
+  });
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["write-offs", session?.user.id, month, restaurantId, area],
+    queryKey: ["write-offs", session?.user.id, month, networkId, restaurantId, area],
     queryFn: () =>
       listWriteOffs({
         data: {
           session_token: sessionToken!,
           month: isAccountant ? month : null,
+          network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
           restaurant_id: isAccountant && restaurantId !== "all" ? restaurantId : null,
           area: isAccountant && area !== "all" ? (area as "bar" | "kitchen") : null,
         },
@@ -70,17 +84,39 @@ function WriteOffsPage() {
       </div>
 
       {isAccountant ? (
-        <AccountantFilters
-          month={month}
-          setMonth={setMonth}
-          restaurantId={restaurantId}
-          setRestaurantId={setRestaurantId}
-          area={area}
-          setArea={setArea}
-          restaurants={data?.restaurants ?? []}
-          onExport={() => exportWriteOffsToExcel(data?.write_offs ?? [], month)}
-          canExport={Boolean(data?.write_offs.length)}
-        />
+        <div className="space-y-3">
+          {isSuperAdmin && (
+            <label className="grid max-w-xs gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">Сеть</span>
+              <select
+                value={networkId}
+                onChange={(event) => {
+                  setNetworkId(event.target.value);
+                  setRestaurantId("all");
+                }}
+                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="all">Все сети</option>
+                {networks.map((network) => (
+                  <option key={network.id} value={network.id}>
+                    {network.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <AccountantFilters
+            month={month}
+            setMonth={setMonth}
+            restaurantId={restaurantId}
+            setRestaurantId={setRestaurantId}
+            area={area}
+            setArea={setArea}
+            restaurants={data?.restaurants ?? []}
+            onExport={() => exportWriteOffsToExcel(data?.write_offs ?? [], month)}
+            canExport={Boolean(data?.write_offs.length)}
+          />
+        </div>
       ) : (
         <CreateWriteOffForm products={data?.products ?? []} sessionToken={sessionToken} />
       )}

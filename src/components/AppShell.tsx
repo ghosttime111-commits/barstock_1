@@ -122,6 +122,9 @@ export function AppShell({
     if (!session || !freshSession) return;
     const changed =
       session.user.restaurant_id !== freshSession.user.restaurant_id ||
+      session.user.network_id !== freshSession.user.network_id ||
+      session.network?.id !== freshSession.network?.id ||
+      session.network?.name !== freshSession.network?.name ||
       session.restaurant?.id !== freshSession.restaurant?.id ||
       session.restaurant?.name !== freshSession.restaurant?.name ||
       session.user.name !== freshSession.user.name ||
@@ -155,6 +158,7 @@ export function AppShell({
       userName={session.user.name}
       role={roleLabel(role)}
       restaurantName={session.restaurant?.name ?? null}
+      networkName={session.network?.name ?? null}
       onNavigate={() => setMobileMenuOpen(false)}
       onLogout={logout}
     />
@@ -209,6 +213,7 @@ function SidebarContent({
   userName,
   role,
   restaurantName,
+  networkName,
   onNavigate,
   onLogout,
 }: {
@@ -218,6 +223,7 @@ function SidebarContent({
   userName: string;
   role: string;
   restaurantName: string | null;
+  networkName: string | null;
   onNavigate: () => void;
   onLogout: () => void;
 }) {
@@ -234,8 +240,11 @@ function SidebarContent({
           </span>
           <span>BarStock</span>
         </Link>
-        {restaurantName && (
-          <p className="mt-2 truncate pl-11 text-xs text-muted-foreground">{restaurantName}</p>
+        {(networkName || restaurantName) && (
+          <div className="mt-2 space-y-0.5 pl-11 text-xs text-muted-foreground">
+            {networkName && <p className="truncate">{networkName}</p>}
+            {restaurantName && <p className="truncate">{restaurantName}</p>}
+          </div>
         )}
       </div>
 

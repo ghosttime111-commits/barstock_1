@@ -33,6 +33,7 @@ type ArchiveRow = {
 
 type ArchiveInventoryReport = {
   inventory: ArchiveInventory;
+  network?: { id?: string; name?: string | null } | null;
   restaurant?: ArchiveRestaurant;
   rows: ArchiveRow[];
 };
@@ -112,6 +113,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
   const summaryRows = [
     [
       "Дата переучёта",
+      "Сеть ресторанов",
       "Ресторан",
       "\u0417\u043e\u043d\u0430",
       "Количество позиций",
@@ -131,6 +133,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
 
       return [
         formatDate(report.inventory.created_at),
+        report.network?.name ?? "",
         report.restaurant?.name ?? "",
         translateArea(report.inventory.area),
         report.rows.length,
@@ -146,6 +149,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
   summarySheet["!cols"] = [
     { wch: 22 },
     { wch: 28 },
+    { wch: 28 },
     { wch: 12 },
     { wch: 18 },
     { wch: 22 },
@@ -158,6 +162,7 @@ export function exportMonthlyArchiveToExcel(archive: MonthlyArchive) {
   archive.inventories.forEach((report, index) => {
     const restaurantName = report.restaurant?.name ?? "";
     const rows = [
+      ["Сеть ресторанов:", report.network?.name ?? ""],
       ["Ресторан:", restaurantName],
       ["Дата переучёта:", formatDate(report.inventory.created_at)],
       ["\u0417\u043e\u043d\u0430:", translateArea(report.inventory.area)],

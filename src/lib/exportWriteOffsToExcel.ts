@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 
 export type WriteOffExportRow = {
   created_at: string;
+  network_name?: string;
   restaurant_name: string;
   area: string;
   product_name: string;
@@ -24,6 +25,7 @@ export function exportWriteOffsToExcel(rows: WriteOffExportRow[], month: string)
     [],
     [
       "Дата",
+      "Сеть ресторанов",
       "Ресторан",
       "Зона",
       "Товар",
@@ -39,6 +41,7 @@ export function exportWriteOffsToExcel(rows: WriteOffExportRow[], month: string)
         dateStyle: "short",
         timeStyle: "short",
       }),
+      row.network_name ?? "",
       row.restaurant_name,
       areaLabel(row.area),
       row.product_name,
@@ -53,6 +56,7 @@ export function exportWriteOffsToExcel(rows: WriteOffExportRow[], month: string)
   const sheet = XLSX.utils.aoa_to_sheet(data);
   sheet["!cols"] = [
     { wch: 19 },
+    { wch: 28 },
     { wch: 26 },
     { wch: 12 },
     { wch: 34 },

@@ -52,14 +52,17 @@ function ManagerPage() {
   const [month, setMonth] = useState(monthValue());
   const [restaurantId, setRestaurantId] = useState("all");
   const [area, setArea] = useState("all");
+  const [networkId, setNetworkId] = useState("all");
+  const isSuperAdmin = session?.user.role === "super_admin";
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["manager-stats", month, restaurantId, area, session?.user.restaurant_id],
+    queryKey: ["manager-stats", month, networkId, restaurantId, area, session?.user.restaurant_id],
     queryFn: () =>
       getStats({
         data: {
           month,
           restaurant_id: restaurantId === "all" ? null : restaurantId,
+          network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
           area: area === "all" ? null : (area as "bar" | "kitchen"),
           session_token: sessionToken!,
         },
@@ -110,6 +113,26 @@ function ManagerPage() {
               onChange={(event) => setMonth(event.target.value)}
               className="md:w-44"
             />
+          </label>
+        )}
+        {isSuperAdmin && (
+          <label className="grid gap-1 text-sm">
+            <span className="text-xs text-muted-foreground">Сеть</span>
+            <select
+              value={networkId}
+              onChange={(event) => {
+                setNetworkId(event.target.value);
+                setRestaurantId("all");
+              }}
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="all">Все сети</option>
+              {data?.networks.map((network) => (
+                <option key={network.id} value={network.id}>
+                  {network.name}
+                </option>
+              ))}
+            </select>
           </label>
         )}
         <label className="grid gap-1 text-sm">

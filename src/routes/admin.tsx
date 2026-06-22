@@ -14,17 +14,20 @@ import {
   createCategoryFn,
   createProductFn,
   createRestaurantFn,
+  createRestaurantNetworkFn,
   deleteCategoryFn,
   deleteBartenderFn,
   deleteRestaurantFn,
   listBartendersFn,
   listCategoriesFn,
   listProductsFn,
+  listRestaurantNetworksFn,
   listRestaurantsFn,
   restoreProductFn,
   updateBartenderRestaurantFn,
   updateCategoryFn,
   updateProductFn,
+  updateRestaurantNetworkFn,
 } from "@/lib/barstock.functions";
 import { useSession } from "@/lib/session";
 
@@ -37,7 +40,8 @@ export const Route = createFileRoute("/admin")({
   ),
 });
 
-type Restaurant = { id: string; name: string };
+type RestaurantNetwork = { id: string; name: string; is_active: boolean };
+type Restaurant = { id: string; name: string; network_id: string };
 type StaffRole = "bartender" | "kitchen_manager" | "accountant" | "manager" | "super_admin";
 type ProductArea = "bar" | "kitchen";
 type Bartender = {
@@ -46,9 +50,15 @@ type Bartender = {
   login: string;
   role: StaffRole | string;
   restaurant_id: string | null;
+  network_id: string | null;
   is_active?: boolean | null;
 };
-type Category = { id: string; name: string; area?: ProductArea | string | null };
+type Category = {
+  id: string;
+  name: string;
+  area?: ProductArea | string | null;
+  network_id: string;
+};
 type ProductUnit = "л" | "кг" | "шт" | "бут";
 type ProductStatus = "approved" | "pending" | "archived";
 type ProductStatusFilter = "active" | "archived" | "all";
@@ -60,6 +70,7 @@ type Product = {
   status: ProductStatus | string | null;
   unit_price: number | string | null;
   area?: ProductArea | string | null;
+  network_id: string;
 };
 type ProductDraft = {
   name: string;
@@ -70,7 +81,12 @@ type ProductDraft = {
   area: ProductArea;
 };
 type ProductChange = { id: string; draft: ProductDraft };
-type StaffDraft = { role: StaffRole; restaurant_id: string; is_active: boolean };
+type StaffDraft = {
+  role: StaffRole;
+  restaurant_id: string;
+  network_id: string;
+  is_active: boolean;
+};
 type StaffChange = { id: string; draft: StaffDraft };
 type CategoryDraft = { name: string; area: ProductArea };
 type CategoryChange = { id: string; draft: CategoryDraft };
@@ -146,6 +162,7 @@ function staffDraftFromStaff(staff: Bartender): StaffDraft {
   return {
     role: staff.role as StaffRole,
     restaurant_id: staff.restaurant_id ?? "",
+    network_id: staff.network_id ?? "",
     is_active: staff.is_active !== false,
   };
 }
@@ -154,6 +171,7 @@ function staffDraftsEqual(left: StaffDraft, right: StaffDraft) {
   return (
     left.role === right.role &&
     left.restaurant_id === right.restaurant_id &&
+    left.network_id === right.network_id &&
     left.is_active === right.is_active
   );
 }
@@ -195,6 +213,10 @@ function AdminPage() {
   const availableStaffRoles = isSuperAdmin ? superAdminStaffRoles : accountantStaffRoles;
   const queryClient = useQueryClient();
 
+  const listNetworks = useServerFn(listRestaurantNetworksFn);
+  const createNetwork = useServerFn(createRestaurantNetworkFn);
+  const updateNetwork = useServerFn(updateRestaurantNetworkFn);
+
   const listRestaurants = useServerFn(listRestaurantsFn);
   const createRestaurant = useServerFn(createRestaurantFn);
   const listBartenders = useServerFn(listBartendersFn);
@@ -211,6 +233,9 @@ function AdminPage() {
   const updateProduct = useServerFn(updateProductFn);
   const restoreProduct = useServerFn(restoreProductFn);
 
+  const [networkFilter, setNetworkFilter] = useState("all");
+  const [creationNetworkId, setCreationNetworkId] = useState(session?.user.network_id ?? "");
+  const [networkName, setNetworkName] = useState("");
   const [restaurantName, setRestaurantName] = useState("");
   const [bartenderName, setBartenderName] = useState("");
   const [bartenderLogin, setBartenderLogin] = useState("");
@@ -240,24 +265,35 @@ function AdminPage() {
     area: "bar",
   });
 
+  const networksQuery = useQuery({
+    queryKey: ["restaurant-networks"],
+    queryFn: () => listNetworks({ data: { session_token: sessionToken! } }),
+    enabled: !!sessionToken && isSuperAdmin,
+  });
+  const selectedNetworkId = isSuperAdmin && networkFilter !== "all" ? networkFilter : undefined;
+
   const restaurantsQuery = useQuery({
-    queryKey: ["restaurants"],
-    queryFn: () => listRestaurants({ data: { session_token: sessionToken! } }),
+    queryKey: ["restaurants", selectedNetworkId],
+    queryFn: () =>
+      listRestaurants({ data: { session_token: sessionToken!, network_id: selectedNetworkId } }),
     enabled: !!sessionToken,
   });
   const bartendersQuery = useQuery({
-    queryKey: ["bartenders"],
-    queryFn: () => listBartenders({ data: { session_token: sessionToken! } }),
+    queryKey: ["bartenders", selectedNetworkId],
+    queryFn: () =>
+      listBartenders({ data: { session_token: sessionToken!, network_id: selectedNetworkId } }),
     enabled: !!sessionToken,
   });
   const categoriesQuery = useQuery({
-    queryKey: ["categories"],
-    queryFn: () => listCategories({ data: { session_token: sessionToken! } }),
+    queryKey: ["categories", selectedNetworkId],
+    queryFn: () =>
+      listCategories({ data: { session_token: sessionToken!, network_id: selectedNetworkId } }),
     enabled: !!sessionToken,
   });
   const productsQuery = useQuery({
-    queryKey: ["products"],
-    queryFn: () => listProducts({ data: { session_token: sessionToken! } }),
+    queryKey: ["products", selectedNetworkId],
+    queryFn: () =>
+      listProducts({ data: { session_token: sessionToken!, network_id: selectedNetworkId } }),
     enabled: !!sessionToken,
   });
 
@@ -274,6 +310,10 @@ function AdminPage() {
     [categoriesQuery.data],
   );
   const products = useMemo(() => (productsQuery.data ?? []) as Product[], [productsQuery.data]);
+  const networks = useMemo(
+    () => (networksQuery.data ?? []) as RestaurantNetwork[],
+    [networksQuery.data],
+  );
   const restaurantById = useMemo(
     () => new Map(restaurants.map((restaurant) => [restaurant.id, restaurant.name])),
     [restaurants],
@@ -291,8 +331,20 @@ function AdminPage() {
     [categories, categoryAreaFilter],
   );
   const newProductCategories = useMemo(
-    () => categories.filter((category) => (category.area ?? "bar") === newProduct.area),
-    [categories, newProduct.area],
+    () =>
+      categories.filter(
+        (category) =>
+          (category.area ?? "bar") === newProduct.area &&
+          (!isSuperAdmin || category.network_id === creationNetworkId),
+      ),
+    [categories, creationNetworkId, isSuperAdmin, newProduct.area],
+  );
+  const creationRestaurants = useMemo(
+    () =>
+      isSuperAdmin
+        ? restaurants.filter((restaurant) => restaurant.network_id === creationNetworkId)
+        : restaurants,
+    [creationNetworkId, isSuperAdmin, restaurants],
   );
   const filteredProducts = useMemo(() => {
     const search = productSearch.trim().toLowerCase();
@@ -317,12 +369,35 @@ function AdminPage() {
       queryClient.invalidateQueries({ queryKey: ["bartenders"] }),
       queryClient.invalidateQueries({ queryKey: ["categories"] }),
       queryClient.invalidateQueries({ queryKey: ["products"] }),
+      queryClient.invalidateQueries({ queryKey: ["restaurant-networks"] }),
     ]);
   };
 
+  const createNetworkMutation = useMutation({
+    mutationFn: () =>
+      createNetwork({ data: { name: networkName.trim(), session_token: sessionToken! } }),
+    onSuccess: async (network) => {
+      setNetworkName("");
+      setCreationNetworkId(network.id);
+      setNetworkFilter(network.id);
+      await refreshAdminData();
+    },
+  });
+  const updateNetworkMutation = useMutation({
+    mutationFn: (network: RestaurantNetwork) =>
+      updateNetwork({ data: { ...network, session_token: sessionToken! } }),
+    onSuccess: refreshAdminData,
+  });
+
   const createRestaurantMutation = useMutation({
     mutationFn: () =>
-      createRestaurant({ data: { name: restaurantName.trim(), session_token: sessionToken! } }),
+      createRestaurant({
+        data: {
+          name: restaurantName.trim(),
+          network_id: isSuperAdmin ? creationNetworkId : undefined,
+          session_token: sessionToken!,
+        },
+      }),
     onSuccess: async (restaurant) => {
       setRestaurantName("");
       if (!bartenderRestaurantId) setBartenderRestaurantId(restaurant.id);
@@ -337,6 +412,8 @@ function AdminPage() {
           login: bartenderLogin.trim(),
           password: bartenderPassword,
           role: bartenderRole,
+          network_id:
+            isSuperAdmin && bartenderRole === "super_admin" ? null : creationNetworkId || undefined,
           restaurant_id:
             bartenderRole === "accountant" || bartenderRole === "super_admin"
               ? null
@@ -364,6 +441,7 @@ function AdminPage() {
               id,
               role: draft.role,
               restaurant_id: draft.restaurant_id || null,
+              network_id: isSuperAdmin ? draft.network_id || null : undefined,
               is_active: draft.is_active,
               session_token: sessionToken!,
             },
@@ -405,7 +483,12 @@ function AdminPage() {
   const createCategoryMutation = useMutation({
     mutationFn: () =>
       createCategory({
-        data: { name: categoryName.trim(), area: categoryArea, session_token: sessionToken! },
+        data: {
+          name: categoryName.trim(),
+          area: categoryArea,
+          network_id: isSuperAdmin ? creationNetworkId : undefined,
+          session_token: sessionToken!,
+        },
       }),
     onSuccess: async () => {
       setCategoryName("");
@@ -455,6 +538,7 @@ function AdminPage() {
       createProduct({
         data: {
           ...newProduct,
+          network_id: isSuperAdmin ? creationNetworkId : undefined,
           unit_price: parseMoneyInput(newProduct.unit_price),
           session_token: sessionToken!,
         },
@@ -653,7 +737,9 @@ function AdminPage() {
 
   function submitRestaurant(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (restaurantName.trim()) createRestaurantMutation.mutate();
+    if (restaurantName.trim() && (!isSuperAdmin || creationNetworkId)) {
+      createRestaurantMutation.mutate();
+    }
   }
 
   function submitBartender(event: FormEvent<HTMLFormElement>) {
@@ -662,6 +748,7 @@ function AdminPage() {
       bartenderName.trim() &&
       bartenderLogin.trim() &&
       bartenderPassword &&
+      (!isSuperAdmin || bartenderRole === "super_admin" || creationNetworkId) &&
       (["accountant", "manager", "super_admin"].includes(bartenderRole) || bartenderRestaurantId)
     ) {
       createBartenderMutation.mutate();
@@ -670,12 +757,19 @@ function AdminPage() {
 
   function submitCategory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (categoryName.trim()) createCategoryMutation.mutate();
+    if (categoryName.trim() && (!isSuperAdmin || creationNetworkId)) {
+      createCategoryMutation.mutate();
+    }
   }
 
   function submitProduct(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (newProduct.name.trim() && newProduct.category_id && newProduct.unit) {
+    if (
+      newProduct.name.trim() &&
+      newProduct.category_id &&
+      newProduct.unit &&
+      (!isSuperAdmin || creationNetworkId)
+    ) {
       createProductMutation.mutate();
     }
   }
@@ -699,6 +793,80 @@ function AdminPage() {
           Рестораны, бармены, категории и товары для переучётов.
         </p>
       </div>
+
+      {isSuperAdmin && (
+        <section className="rounded-xl border border-border bg-card p-4">
+          <SectionTitle
+            icon={<Building2 className="size-5 text-primary" />}
+            title="Сети ресторанов"
+          />
+          <div className="mb-4 grid gap-3 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+            <label className="grid gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">Фильтр данных</span>
+              <select
+                value={networkFilter}
+                onChange={(event) => setNetworkFilter(event.target.value)}
+                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="all">Все сети</option>
+                {networks.map((network) => (
+                  <option key={network.id} value={network.id}>
+                    {network.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">Сеть для новых данных</span>
+              <select
+                value={creationNetworkId}
+                onChange={(event) => setCreationNetworkId(event.target.value)}
+                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="">Выберите сеть</option>
+                {networks
+                  .filter((network) => network.is_active)
+                  .map((network) => (
+                    <option key={network.id} value={network.id}>
+                      {network.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <form
+              className="flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (networkName.trim()) createNetworkMutation.mutate();
+              }}
+            >
+              <Input
+                value={networkName}
+                onChange={(event) => setNetworkName(event.target.value)}
+                placeholder="Название новой сети"
+              />
+              <Button
+                type="submit"
+                disabled={!networkName.trim() || createNetworkMutation.isPending}
+              >
+                Создать
+              </Button>
+            </form>
+          </div>
+          <ErrorText error={createNetworkMutation.error} fallback="Не удалось создать сеть" />
+          <ErrorText error={updateNetworkMutation.error} fallback="Не удалось сохранить сеть" />
+          <div className="grid gap-2">
+            {networks.map((network) => (
+              <NetworkEditor
+                key={network.id}
+                network={network}
+                pending={updateNetworkMutation.isPending}
+                onSave={(next) => updateNetworkMutation.mutate(next)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="rounded-xl border border-border bg-card p-4">
         <SectionTitle icon={<Building2 className="size-5 text-primary" />} title="Рестораны" />
@@ -746,7 +914,7 @@ function AdminPage() {
 
       <section className="rounded-xl border border-border bg-card p-4">
         <SectionTitle icon={<UserPlus className="size-5 text-primary" />} title="Сотрудники" />
-        <form onSubmit={submitBartender} className="mb-5 grid gap-2 md:grid-cols-6">
+        <form onSubmit={submitBartender} className="mb-5 grid gap-2 md:grid-cols-2 lg:grid-cols-7">
           <Input
             value={bartenderName}
             onChange={(event) => setBartenderName(event.target.value)}
@@ -768,9 +936,19 @@ function AdminPage() {
             roles={availableStaffRoles}
             onChange={setBartenderRole}
           />
+          {isSuperAdmin && (
+            <NetworkSelect
+              value={creationNetworkId}
+              networks={networks.filter((network) => network.is_active)}
+              onChange={(value) => {
+                setCreationNetworkId(value);
+                setBartenderRestaurantId("");
+              }}
+            />
+          )}
           <RestaurantSelect
             value={bartenderRestaurantId}
-            restaurants={restaurants}
+            restaurants={creationRestaurants}
             onChange={setBartenderRestaurantId}
             allowAll={bartenderRole === "manager"}
             disabled={bartenderRole === "accountant" || bartenderRole === "super_admin"}
@@ -780,7 +958,8 @@ function AdminPage() {
             disabled={
               createBartenderMutation.isPending ||
               ((bartenderRole === "bartender" || bartenderRole === "kitchen_manager") &&
-                restaurants.length === 0)
+                creationRestaurants.length === 0) ||
+              (isSuperAdmin && bartenderRole !== "super_admin" && !creationNetworkId)
             }
           >
             <UserPlus className="size-4" />
@@ -821,6 +1000,7 @@ function AdminPage() {
                 <th className="px-3 py-2 text-left font-medium">Имя</th>
                 <th className="px-3 py-2 text-left font-medium">Логин</th>
                 <th className="px-3 py-2 text-left font-medium">{"\u0420\u043e\u043b\u044c"}</th>
+                {isSuperAdmin && <th className="px-3 py-2 text-left font-medium">Сеть</th>}
                 <th className="px-3 py-2 text-left font-medium">Ресторан</th>
                 <th className="px-3 py-2 text-left font-medium">
                   {"\u0410\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c"}
@@ -870,6 +1050,17 @@ function AdminPage() {
                         staffRoleLabel(bartender.role)
                       )}
                     </td>
+                    {isSuperAdmin && (
+                      <td className="px-3 py-2">
+                        <NetworkSelect
+                          value={draft.network_id}
+                          networks={networks}
+                          onChange={(network_id) =>
+                            setStaffDraft(bartender.id, { network_id, restaurant_id: "" })
+                          }
+                        />
+                      </td>
+                    )}
                     <td className="px-3 py-2">
                       {bartender.restaurant_id
                         ? (restaurantById.get(bartender.restaurant_id) ?? "Не найден")
@@ -894,7 +1085,9 @@ function AdminPage() {
                       {canAssignRestaurant ? (
                         <RestaurantSelect
                           value={draft.restaurant_id}
-                          restaurants={restaurants}
+                          restaurants={restaurants.filter(
+                            (restaurant) => restaurant.network_id === draft.network_id,
+                          )}
                           allowAll={draft.role === "manager"}
                           onChange={(restaurant_id) =>
                             setStaffDraft(bartender.id, { restaurant_id })
@@ -1327,6 +1520,64 @@ function RestaurantSelect({
         </option>
       ))}
     </select>
+  );
+}
+
+function NetworkSelect({
+  value,
+  networks,
+  onChange,
+}: {
+  value: string;
+  networks: RestaurantNetwork[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+    >
+      <option value="">Сеть ресторанов</option>
+      {networks.map((network) => (
+        <option key={network.id} value={network.id}>
+          {network.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function NetworkEditor({
+  network,
+  pending,
+  onSave,
+}: {
+  network: RestaurantNetwork;
+  pending: boolean;
+  onSave: (network: RestaurantNetwork) => void;
+}) {
+  const [name, setName] = useState(network.name);
+  const [isActive, setIsActive] = useState(network.is_active);
+  const changed = name.trim() !== network.name || isActive !== network.is_active;
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border p-3 sm:flex-row sm:items-center">
+      <Input value={name} onChange={(event) => setName(event.target.value)} />
+      <label className="flex items-center gap-2 text-sm">
+        <Switch checked={isActive} onCheckedChange={setIsActive} />
+        {isActive ? "Активна" : "Отключена"}
+      </label>
+      <Button
+        type="button"
+        size="sm"
+        disabled={!changed || !name.trim() || pending}
+        onClick={() => onSave({ ...network, name: name.trim(), is_active: isActive })}
+      >
+        <Save className="size-4" />
+        Сохранить
+      </Button>
+    </div>
   );
 }
 

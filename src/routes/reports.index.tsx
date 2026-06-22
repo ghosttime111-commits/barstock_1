@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   getMonthlyArchiveFn,
   listClosedInventoriesFn,
+  listRestaurantNetworksFn,
   listRestaurantsFn,
 } from "@/lib/barstock.functions";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ function ReportsListPage() {
   const { session } = useSession();
   const list = useServerFn(listClosedInventoriesFn);
   const listRestaurants = useServerFn(listRestaurantsFn);
+  const listNetworks = useServerFn(listRestaurantNetworksFn);
   const getMonthlyArchive = useServerFn(getMonthlyArchiveFn);
   const [restaurantId, setRestaurantId] = useState<string>("all");
   const [area, setArea] = useState<string>("all");
@@ -35,19 +37,34 @@ function ReportsListPage() {
   const [archiveRestaurantId, setArchiveRestaurantId] = useState<string>("all");
   const [archiveArea, setArchiveArea] = useState<string>("all");
   const sessionToken = session?.session_token ?? null;
+  const isSuperAdmin = session?.user.role === "super_admin";
+  const [networkId, setNetworkId] = useState<string>("all");
+
+  const { data: networks = [] } = useQuery({
+    queryKey: ["restaurant-networks"],
+    queryFn: () => listNetworks({ data: { session_token: sessionToken! } }),
+    enabled: !!sessionToken && isSuperAdmin,
+  });
 
   const { data: restaurants = [] } = useQuery({
-    queryKey: ["restaurants"],
-    queryFn: () => listRestaurants({ data: { session_token: sessionToken! } }),
+    queryKey: ["restaurants", networkId],
+    queryFn: () =>
+      listRestaurants({
+        data: {
+          session_token: sessionToken!,
+          network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
+        },
+      }),
     enabled: !!sessionToken,
   });
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["reports", restaurantId, area],
+    queryKey: ["reports", networkId, restaurantId, area],
     queryFn: () =>
       list({
         data: {
           restaurant_id: restaurantId === "all" ? null : restaurantId,
+          network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
           area: area === "all" ? null : area,
           session_token: sessionToken!,
         },
@@ -61,6 +78,7 @@ function ReportsListPage() {
         data: {
           month: archiveMonth,
           restaurant_id: archiveRestaurantId === "all" ? null : archiveRestaurantId,
+          network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
           area: archiveArea === "all" ? null : archiveArea,
           session_token: sessionToken!,
         },
@@ -75,6 +93,27 @@ function ReportsListPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Отчёты по переучётам</h1>
           <p className="text-sm text-muted-foreground">Все закрытые переучёты ресторанов.</p>
         </div>
+        {isSuperAdmin && (
+          <label className="grid gap-1 text-sm">
+            <span className="text-xs text-muted-foreground">Сеть</span>
+            <select
+              value={networkId}
+              onChange={(event) => {
+                setNetworkId(event.target.value);
+                setRestaurantId("all");
+                setArchiveRestaurantId("all");
+              }}
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="all">Все сети</option>
+              {networks.map((network) => (
+                <option key={network.id} value={network.id}>
+                  {network.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="grid gap-1 text-sm">
           <span className="text-xs text-muted-foreground">Ресторан</span>
           <select
@@ -171,6 +210,7 @@ function ReportsListPage() {
                   })}
                 </div>
                 <div className="text-xs text-muted-foreground">
+                  {isSuperAdmin && inv.network_name ? `${inv.network_name} · ` : ""}
                   {inv.restaurant_name ?? "Ресторан не указан"} - {areaLabel(inv.area)} -{" "}
                   {inv.created_by_name ?? "—"} · позиций: {inv.items_count}
                 </div>

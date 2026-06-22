@@ -26,7 +26,9 @@ const writeOffFiltersSchema = sessionSchema.extend({
     .optional(),
   restaurant_id: z.string().uuid().nullable().optional(),
   area: inventoryAreaSchema.nullable().optional(),
+  network_id: z.string().uuid().nullable().optional(),
 });
+const networkFilterSchema = { network_id: z.string().uuid().nullable().optional() };
 
 type StaffRole = z.infer<typeof staffRoleSchema>;
 type InventoryArea = z.infer<typeof inventoryAreaSchema>;
@@ -38,16 +40,19 @@ type AuthUser = {
   login: string;
   role: StaffRole;
   restaurant_id: string | null;
+  network_id: string | null;
 };
 
 type AuthContext = {
   user: AuthUser;
   restaurant: { id: string; name: string } | null;
+  network: { id: string; name: string; is_active: boolean } | null;
 };
 
 type InventoryRow = {
   id: string;
   restaurant_id: string;
+  network_id: string;
   status: string;
   created_at: string;
   created_by: string | null;
@@ -149,6 +154,19 @@ async function loadRestaurant(
   return data ?? null;
 }
 
+async function loadNetwork(
+  sb: ReturnType<typeof import("./barstock.server").getBarstock>,
+  id: string | null,
+) {
+  if (!id) return null;
+  const { data } = await sb
+    .from("restaurant_networks")
+    .select("id,name,is_active")
+    .eq("id", id)
+    .maybeSingle();
+  return data ?? null;
+}
+
 async function recordLoginEvent(
   sb: ReturnType<typeof import("./barstock.server").getBarstock>,
   input: {
@@ -183,7 +201,7 @@ async function requireSession(sessionToken: string): Promise<AuthContext> {
   const userId = verifySessionToken(sessionToken);
   const { data: user, error } = await sb
     .from("users")
-    .select("id,name,login,role,restaurant_id,is_active")
+    .select("id,name,login,role,restaurant_id,network_id,is_active")
     .eq("id", userId)
     .maybeSingle();
 
@@ -194,10 +212,19 @@ async function requireSession(sessionToken: string): Promise<AuthContext> {
   if (user.is_active === false) {
     throw new Error("Пользователь отключён");
   }
+  if (user.role !== "super_admin" && !user.network_id) {
+    throw new Error("Пользователю не назначена сеть ресторанов");
+  }
+
+  const network = await loadNetwork(sb, user.network_id);
+  if (user.role !== "super_admin" && (!network || network.is_active === false)) {
+    throw new Error("Сеть ресторанов отключена");
+  }
 
   return {
     user: user as AuthUser,
     restaurant: await loadRestaurant(sb, user.restaurant_id),
+    network,
   };
 }
 
@@ -212,6 +239,30 @@ function requireAccountingAccess(ctx: AuthContext) {
   requireRole(ctx, ["accountant", "super_admin"]);
 }
 
+function requireNetworkId(ctx: AuthContext) {
+  if (!ctx.user.network_id) throw new Error("Пользователю не назначена сеть ресторанов");
+  return ctx.user.network_id;
+}
+
+function assertSameNetwork(ctx: AuthContext, targetNetworkId: string | null | undefined) {
+  if (ctx.user.role === "super_admin") return;
+  if (!targetNetworkId || requireNetworkId(ctx) !== targetNetworkId) {
+    throw new Error("Нет доступа к этой сети ресторанов");
+  }
+}
+
+function resolveNetworkId(ctx: AuthContext, requestedNetworkId?: string | null) {
+  if (ctx.user.role === "super_admin") {
+    if (!requestedNetworkId) throw new Error("Выберите сеть ресторанов");
+    return requestedNetworkId;
+  }
+  const networkId = requireNetworkId(ctx);
+  if (requestedNetworkId && requestedNetworkId !== networkId) {
+    throw new Error("Нет доступа к этой сети ресторанов");
+  }
+  return networkId;
+}
+
 function roleArea(role: OperationalRole): InventoryArea {
   return role === "kitchen_manager" ? "kitchen" : "bar";
 }
@@ -223,9 +274,10 @@ function requireOperationalRole(ctx: AuthContext): InventoryArea {
 
 function requireOperationalInventoryAccess(
   ctx: AuthContext,
-  inventory: { restaurant_id: string | null; area?: string | null },
+  inventory: { restaurant_id: string | null; network_id?: string | null; area?: string | null },
 ) {
   const area = requireOperationalRole(ctx);
+  assertSameNetwork(ctx, inventory.network_id);
   if (!ctx.user.restaurant_id || ctx.user.restaurant_id !== inventory.restaurant_id) {
     throw new Error("Нет доступа к этому ресторану");
   }
@@ -247,7 +299,7 @@ export const loginFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: user, error } = await sb
       .from("users")
-      .select("id,name,login,role,restaurant_id,password_hash,is_active")
+      .select("id,name,login,role,restaurant_id,network_id,password_hash,is_active")
       .eq("login", data.login)
       .maybeSingle();
 
@@ -291,6 +343,25 @@ export const loginFn = createServerFn({ method: "POST" })
       });
       throw new Error("Неверный логин или пароль");
     }
+    if (user.role !== "super_admin" && !user.network_id) {
+      await recordLoginEvent(sb, {
+        login: data.login,
+        success: false,
+        failure_reason: "network_not_assigned",
+        user: eventUser,
+      });
+      throw new Error("Пользователю не назначена сеть ресторанов");
+    }
+    const userNetwork = await loadNetwork(sb, user.network_id);
+    if (user.role !== "super_admin" && (!userNetwork || userNetwork.is_active === false)) {
+      await recordLoginEvent(sb, {
+        login: data.login,
+        success: false,
+        failure_reason: "inactive_network",
+        user: eventUser,
+      });
+      throw new Error("Сеть ресторанов отключена");
+    }
 
     if (!String(user.password_hash ?? "").startsWith("pbkdf2$sha256$")) {
       await sb
@@ -312,8 +383,10 @@ export const loginFn = createServerFn({ method: "POST" })
         login: user.login,
         role: user.role,
         restaurant_id: user.restaurant_id,
+        network_id: user.network_id,
       },
       restaurant: await loadRestaurant(sb, user.restaurant_id),
+      network: userNetwork,
       session_token: createSessionToken(user.id),
     };
   });
@@ -376,47 +449,110 @@ export const currentSessionFn = createServerFn({ method: "POST" })
         login: ctx.user.login,
         role: ctx.user.role,
         restaurant_id: ctx.user.restaurant_id,
+        network_id: ctx.user.network_id,
       },
       restaurant: ctx.restaurant,
+      network: ctx.network,
       session_token: data.session_token,
     };
   });
 
-export const listRestaurantsFn = createServerFn({ method: "POST" })
+export const listRestaurantNetworksFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "super_admin");
+    const { getBarstock } = await import("./barstock.server");
+    const { data: rows, error } = await getBarstock()
+      .from("restaurant_networks")
+      .select("id,name,is_active,created_at")
+      .order("name");
+    if (error) throw new Error(error.message);
+    return rows ?? [];
+  });
+
+export const createRestaurantNetworkFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema.extend({ name: z.string().trim().min(1).max(160) }).parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "super_admin");
+    const { getBarstock } = await import("./barstock.server");
+    const { data: network, error } = await getBarstock()
+      .from("restaurant_networks")
+      .insert({ name: data.name, is_active: true })
+      .select("id,name,is_active,created_at")
+      .single();
+    if (error) throw new Error(error.message);
+    return network;
+  });
+
+export const updateRestaurantNetworkFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1).max(160),
+        is_active: z.boolean(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, "super_admin");
+    const { getBarstock } = await import("./barstock.server");
+    const { data: network, error } = await getBarstock()
+      .from("restaurant_networks")
+      .update({ name: data.name, is_active: data.is_active })
+      .eq("id", data.id)
+      .select("id,name,is_active,created_at")
+      .single();
+    if (error) throw new Error(error.message);
+    return network;
+  });
+
+export const listRestaurantsFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.extend(networkFilterSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
     requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
-    const { data: rows, error } = await getBarstock()
-      .from("restaurants")
-      .select("id,name")
-      .order("name");
+    let query = getBarstock().from("restaurants").select("id,name,network_id").order("name");
+    if (ctx.user.role === "super_admin") {
+      if (data.network_id) query = query.eq("network_id", data.network_id);
+    } else {
+      query = query.eq("network_id", requireNetworkId(ctx));
+    }
+    const { data: rows, error } = await query;
     if (error) throw new Error(error.message);
     return rows ?? [];
   });
 
 export const createRestaurantFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
-    sessionSchema.extend({ name: z.string().trim().min(1).max(160) }).parse(input),
+    sessionSchema
+      .extend({ name: z.string().trim().min(1).max(160), ...networkFilterSchema })
+      .parse(input),
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
     requireAccountingAccess(ctx);
 
+    const networkId = resolveNetworkId(ctx, data.network_id);
     const { getBarstock } = await import("./barstock.server");
     const { data: restaurant, error } = await getBarstock()
       .from("restaurants")
-      .insert({ name: data.name })
-      .select("id,name")
+      .insert({ name: data.name, network_id: networkId })
+      .select("id,name,network_id")
       .single();
     if (error) throw new Error(error.message);
     return restaurant;
   });
 
 export const listBartendersFn = createServerFn({ method: "POST" })
-  .inputValidator((input) => sessionSchema.parse(input))
+  .inputValidator((input) => sessionSchema.extend(networkFilterSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
     requireAccountingAccess(ctx);
@@ -424,11 +560,16 @@ export const listBartendersFn = createServerFn({ method: "POST" })
     const { getBarstock } = await import("./barstock.server");
     let query = getBarstock()
       .from("users")
-      .select("id,name,login,role,restaurant_id,is_active")
+      .select("id,name,login,role,restaurant_id,network_id,is_active")
       .in("role", ["bartender", "kitchen_manager", "accountant", "manager", "super_admin"])
       .order("name");
     if (ctx.user.role !== "super_admin") {
-      query = query.neq("role", "super_admin").neq("is_active", false);
+      query = query
+        .eq("network_id", requireNetworkId(ctx))
+        .neq("role", "super_admin")
+        .neq("is_active", false);
+    } else if (data.network_id) {
+      query = query.eq("network_id", data.network_id);
     }
     const { data: rows, error } = await query;
     if (error) throw new Error(error.message);
@@ -444,6 +585,7 @@ export const createBartenderFn = createServerFn({ method: "POST" })
         password: z.string().min(6).max(200),
         role: staffRoleSchema.default("bartender"),
         restaurant_id: z.string().uuid().nullable().optional(),
+        ...networkFilterSchema,
       })
       .parse(input),
   )
@@ -457,6 +599,10 @@ export const createBartenderFn = createServerFn({ method: "POST" })
     if (role === "super_admin" && ctx.user.role !== "super_admin") {
       throw new Error("Только администратор системы может назначить эту роль");
     }
+    const networkId =
+      role === "super_admin" && data.network_id == null
+        ? null
+        : resolveNetworkId(ctx, data.network_id);
     const restaurantId = data.restaurant_id ?? null;
     if ((role === "bartender" || role === "kitchen_manager") && !restaurantId) {
       throw new Error("Restaurant is required for this role");
@@ -464,11 +610,12 @@ export const createBartenderFn = createServerFn({ method: "POST" })
     if (restaurantId) {
       const { data: restaurant, error: restaurantError } = await sb
         .from("restaurants")
-        .select("id")
+        .select("id,network_id")
         .eq("id", restaurantId)
         .maybeSingle();
       if (restaurantError) throw new Error(restaurantError.message);
       if (!restaurant) throw new Error("Restaurant not found");
+      if (restaurant.network_id !== networkId) throw new Error("Ресторан относится к другой сети");
     }
 
     const { data: user, error } = await sb
@@ -478,10 +625,11 @@ export const createBartenderFn = createServerFn({ method: "POST" })
         login: data.login,
         password_hash: hashPassword(data.password),
         role,
+        network_id: networkId,
         restaurant_id: role === "accountant" || role === "super_admin" ? null : restaurantId,
         is_active: true,
       })
-      .select("id,name,login,role,restaurant_id,is_active")
+      .select("id,name,login,role,restaurant_id,network_id,is_active")
       .single();
     if (error) throw new Error(error.message);
     return user;
@@ -500,13 +648,14 @@ export const deleteBartenderFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: bartender, error: bartenderError } = await sb
       .from("users")
-      .select("id,role")
+      .select("id,role,network_id")
       .eq("id", data.id)
       .maybeSingle();
     if (bartenderError) throw new Error(bartenderError.message);
     if (!bartender || !staffRoleSchema.safeParse(bartender.role).success) {
       throw new Error("Staff member not found");
     }
+    assertSameNetwork(ctx, bartender.network_id);
     if (bartender.role === "super_admin" && ctx.user.role !== "super_admin") {
       throw new Error("Только администратор системы может удалить другого администратора");
     }
@@ -549,6 +698,7 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
         restaurant_id: z.string().uuid().nullable(),
         role: staffRoleSchema,
         is_active: z.boolean(),
+        ...networkFilterSchema,
       })
       .parse(input),
   )
@@ -560,13 +710,20 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: bartender, error: bartenderError } = await sb
       .from("users")
-      .select("id,role,restaurant_id,is_active")
+      .select("id,role,restaurant_id,network_id,is_active")
       .eq("id", data.id)
       .maybeSingle();
     if (bartenderError) throw new Error(bartenderError.message);
     if (!bartender || !staffRoleSchema.safeParse(bartender.role).success) {
       throw new Error("Сотрудник не найден");
     }
+    assertSameNetwork(ctx, bartender.network_id);
+    const networkId =
+      ctx.user.role === "super_admin" && data.role === "super_admin" && data.network_id == null
+        ? null
+        : ctx.user.role === "super_admin"
+          ? resolveNetworkId(ctx, data.network_id ?? bartender.network_id)
+          : requireNetworkId(ctx);
     if (ctx.user.id === data.id && (data.role !== bartender.role || !data.is_active)) {
       throw new Error("Нельзя изменить свою роль или отключить себя");
     }
@@ -593,23 +750,25 @@ export const updateBartenderRestaurantFn = createServerFn({ method: "POST" })
     if (data.restaurant_id) {
       const { data: restaurant, error: restaurantError } = await sb
         .from("restaurants")
-        .select("id")
+        .select("id,network_id")
         .eq("id", data.restaurant_id)
         .maybeSingle();
       if (restaurantError) throw new Error(restaurantError.message);
       if (!restaurant) throw new Error("Ресторан не найден");
+      if (restaurant.network_id !== networkId) throw new Error("Ресторан относится к другой сети");
     }
 
     const { data: user, error } = await sb
       .from("users")
       .update({
         role: data.role,
+        network_id: networkId,
         restaurant_id:
           data.role === "accountant" || data.role === "super_admin" ? null : data.restaurant_id,
         is_active: data.is_active,
       })
       .eq("id", data.id)
-      .select("id,name,login,role,restaurant_id,is_active")
+      .select("id,name,login,role,restaurant_id,network_id,is_active")
       .single();
     if (error) throw new Error(error.message);
     return user;
@@ -623,6 +782,14 @@ export const deleteRestaurantFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
+    const { data: restaurant, error: restaurantError } = await sb
+      .from("restaurants")
+      .select("id,network_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (restaurantError) throw new Error(restaurantError.message);
+    if (!restaurant) throw new Error("Ресторан не найден");
+    assertSameNetwork(ctx, restaurant.network_id);
     const [
       { count: activeBartendersCount, error: activeBartendersError },
       { count: inventoriesCount, error: inventoriesError },
@@ -650,16 +817,17 @@ export const deleteRestaurantFn = createServerFn({ method: "POST" })
   });
 
 export const listCategoriesFn = createServerFn({ method: "POST" })
-  .inputValidator((input) => sessionSchema.parse(input))
+  .inputValidator((input) => sessionSchema.extend(networkFilterSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
     requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
-    const { data: rows, error } = await getBarstock()
-      .from("categories")
-      .select("id,name,area")
-      .order("name");
+    let query = getBarstock().from("categories").select("id,name,area,network_id").order("name");
+    if (ctx.user.role === "super_admin") {
+      if (data.network_id) query = query.eq("network_id", data.network_id);
+    } else query = query.eq("network_id", requireNetworkId(ctx));
+    const { data: rows, error } = await query;
     if (error) throw new Error(error.message);
     return rows ?? [];
   });
@@ -667,18 +835,23 @@ export const listCategoriesFn = createServerFn({ method: "POST" })
 export const createCategoryFn = createServerFn({ method: "POST" })
   .inputValidator((input) =>
     sessionSchema
-      .extend({ name: z.string().trim().min(1).max(160), area: inventoryAreaSchema })
+      .extend({
+        name: z.string().trim().min(1).max(160),
+        area: inventoryAreaSchema,
+        ...networkFilterSchema,
+      })
       .parse(input),
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
     requireAccountingAccess(ctx);
 
+    const networkId = resolveNetworkId(ctx, data.network_id);
     const { getBarstock } = await import("./barstock.server");
     const { data: category, error } = await getBarstock()
       .from("categories")
-      .insert({ name: data.name, area: data.area })
-      .select("id,name,area")
+      .insert({ name: data.name, area: data.area, network_id: networkId })
+      .select("id,name,area,network_id")
       .single();
     if (error) throw new Error(error.message);
     return category;
@@ -700,6 +873,14 @@ export const updateCategoryFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
+    const { data: existing, error: existingError } = await sb
+      .from("categories")
+      .select("id,network_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    if (!existing) throw new Error("Категория не найдена");
+    assertSameNetwork(ctx, existing.network_id);
     const { count, error: productsError } = await sb
       .from("products")
       .select("id", { count: "exact", head: true })
@@ -714,7 +895,7 @@ export const updateCategoryFn = createServerFn({ method: "POST" })
       .from("categories")
       .update({ name: data.name, area: data.area })
       .eq("id", data.id)
-      .select("id,name,area")
+      .select("id,name,area,network_id")
       .single();
     if (error) throw new Error(error.message);
     return category;
@@ -728,6 +909,14 @@ export const deleteCategoryFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
+    const { data: existing, error: existingError } = await sb
+      .from("categories")
+      .select("id,network_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    if (!existing) throw new Error("Категория не найдена");
+    assertSameNetwork(ctx, existing.network_id);
     const { count, error: countError } = await sb
       .from("products")
       .select("id", { count: "exact", head: true })
@@ -743,16 +932,20 @@ export const deleteCategoryFn = createServerFn({ method: "POST" })
   });
 
 export const listProductsFn = createServerFn({ method: "POST" })
-  .inputValidator((input) => sessionSchema.parse(input))
+  .inputValidator((input) => sessionSchema.extend(networkFilterSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
     requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
-    const { data: rows, error } = await getBarstock()
+    let query = getBarstock()
       .from("products")
-      .select("id,name,category_id,unit,status,unit_price,area")
+      .select("id,name,category_id,unit,status,unit_price,area,network_id")
       .order("name");
+    if (ctx.user.role === "super_admin") {
+      if (data.network_id) query = query.eq("network_id", data.network_id);
+    } else query = query.eq("network_id", requireNetworkId(ctx));
+    const { data: rows, error } = await query;
     if (error) throw new Error(error.message);
     return rows ?? [];
   });
@@ -767,6 +960,7 @@ export const createProductFn = createServerFn({ method: "POST" })
         status: productStatusSchema.default("approved"),
         unit_price: moneySchema.default(0),
         area: inventoryAreaSchema.default("bar"),
+        ...networkFilterSchema,
       })
       .parse(input),
   )
@@ -776,13 +970,15 @@ export const createProductFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
+    const networkId = resolveNetworkId(ctx, data.network_id);
     const { data: category, error: categoryError } = await sb
       .from("categories")
-      .select("id,area")
+      .select("id,area,network_id")
       .eq("id", data.category_id)
       .maybeSingle();
     if (categoryError) throw new Error(categoryError.message);
     if (!category) throw new Error("Категория не найдена");
+    if (category.network_id !== networkId) throw new Error("Категория относится к другой сети");
     if ((category.area ?? "bar") !== data.area) {
       throw new Error("Зона товара должна совпадать с зоной категории");
     }
@@ -796,8 +992,9 @@ export const createProductFn = createServerFn({ method: "POST" })
         status: data.status,
         unit_price: data.unit_price,
         area: data.area,
+        network_id: networkId,
       })
-      .select("id,name,category_id,unit,status,unit_price,area")
+      .select("id,name,category_id,unit,status,unit_price,area,network_id")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -823,13 +1020,24 @@ export const updateProductFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
+    const { data: existing, error: existingError } = await sb
+      .from("products")
+      .select("id,network_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    if (!existing) throw new Error("Товар не найден");
+    assertSameNetwork(ctx, existing.network_id);
     const { data: category, error: categoryError } = await sb
       .from("categories")
-      .select("id,area")
+      .select("id,area,network_id")
       .eq("id", data.category_id)
       .maybeSingle();
     if (categoryError) throw new Error(categoryError.message);
     if (!category) throw new Error("Категория не найдена");
+    if (category.network_id !== existing.network_id) {
+      throw new Error("Категория относится к другой сети");
+    }
     if ((category.area ?? "bar") !== data.area) {
       throw new Error("Зона товара должна совпадать с зоной категории");
     }
@@ -845,7 +1053,7 @@ export const updateProductFn = createServerFn({ method: "POST" })
         area: data.area,
       })
       .eq("id", data.id)
-      .select("id,name,category_id,unit,status,unit_price,area")
+      .select("id,name,category_id,unit,status,unit_price,area,network_id")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -858,11 +1066,20 @@ export const archiveProductFn = createServerFn({ method: "POST" })
     requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
-    const { data: product, error } = await getBarstock()
+    const sb = getBarstock();
+    const { data: existing, error: existingError } = await sb
+      .from("products")
+      .select("id,network_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    if (!existing) throw new Error("Товар не найден");
+    assertSameNetwork(ctx, existing.network_id);
+    const { data: product, error } = await sb
       .from("products")
       .update({ status: "archived" })
       .eq("id", data.id)
-      .select("id,name,category_id,unit,status,unit_price,area")
+      .select("id,name,category_id,unit,status,unit_price,area,network_id")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -875,11 +1092,20 @@ export const restoreProductFn = createServerFn({ method: "POST" })
     requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
-    const { data: product, error } = await getBarstock()
+    const sb = getBarstock();
+    const { data: existing, error: existingError } = await sb
+      .from("products")
+      .select("id,network_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (existingError) throw new Error(existingError.message);
+    if (!existing) throw new Error("Товар не найден");
+    assertSameNetwork(ctx, existing.network_id);
+    const { data: product, error } = await sb
       .from("products")
       .update({ status: "approved" })
       .eq("id", data.id)
-      .select("id,name,category_id,unit,status,unit_price,area")
+      .select("id,name,category_id,unit,status,unit_price,area,network_id")
       .single();
     if (error) throw new Error(error.message);
     return product;
@@ -895,11 +1121,12 @@ export const deleteProductFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: product, error: productError } = await sb
       .from("products")
-      .select("id")
+      .select("id,network_id")
       .eq("id", data.id)
       .maybeSingle();
     if (productError) throw new Error(productError.message);
     if (!product) throw new Error("Товар не найден");
+    assertSameNetwork(ctx, product.network_id);
 
     const [
       { count: actualCount, error: actualError },
@@ -945,8 +1172,9 @@ export const listInventoriesFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: invs, error } = await sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
+      .select("id,restaurant_id,network_id,status,created_at,created_by,area,correction_comment")
       .eq("restaurant_id", ctx.user.restaurant_id)
+      .eq("network_id", requireNetworkId(ctx))
       .eq("area", area)
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
@@ -969,11 +1197,12 @@ export const createInventoryFn = createServerFn({ method: "POST" })
       .from("inventories")
       .insert({
         restaurant_id: ctx.user.restaurant_id,
+        network_id: requireNetworkId(ctx),
         created_by: ctx.user.id,
         area,
         status: "draft",
       })
-      .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
+      .select("id,restaurant_id,network_id,status,created_at,created_by,area,correction_comment")
       .single();
     if (error) throw new Error(error.message);
 
@@ -1002,11 +1231,19 @@ export const getInventoryFn = createServerFn({ method: "POST" })
     ] = await Promise.all([
       sb
         .from("inventories")
-        .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
+        .select("id,restaurant_id,network_id,status,created_at,created_by,area,correction_comment")
         .eq("id", data.id)
         .maybeSingle(),
-      sb.from("categories").select("id,name,area").order("name"),
-      sb.from("products").select("id,name,unit,category_id,status,area").order("name"),
+      sb
+        .from("categories")
+        .select("id,name,area,network_id")
+        .eq("network_id", requireNetworkId(ctx))
+        .order("name"),
+      sb
+        .from("products")
+        .select("id,name,unit,category_id,status,area,network_id")
+        .eq("network_id", requireNetworkId(ctx))
+        .order("name"),
       sb
         .from("inventory_items")
         .select("inventory_id,product_id,quantity")
@@ -1062,7 +1299,7 @@ export const getInventoryEntriesFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: inv, error: invError } = await sb
       .from("inventories")
-      .select("id,restaurant_id,area")
+      .select("id,restaurant_id,network_id,area")
       .eq("id", data.inventory_id)
       .maybeSingle();
     if (invError) throw new Error(invError.message);
@@ -1124,7 +1361,7 @@ export const upsertItemFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: inv, error: invError } = await sb
       .from("inventories")
-      .select("id,restaurant_id,status,area")
+      .select("id,restaurant_id,network_id,status,area")
       .eq("id", data.inventory_id)
       .maybeSingle();
     if (invError) throw new Error(invError.message);
@@ -1136,11 +1373,15 @@ export const upsertItemFn = createServerFn({ method: "POST" })
 
     const { data: product, error: productError } = await sb
       .from("products")
-      .select("id,area,status")
+      .select("id,area,status,network_id")
       .eq("id", data.product_id)
       .maybeSingle();
     if (productError) throw new Error(productError.message);
-    if (!product || (product.area ?? "bar") !== (inv.area ?? "bar")) {
+    if (
+      !product ||
+      product.network_id !== inv.network_id ||
+      (product.area ?? "bar") !== (inv.area ?? "bar")
+    ) {
       throw new Error(
         "\u0422\u043e\u0432\u0430\u0440 \u043d\u0435 \u043f\u0440\u0438\u043d\u0430\u0434\u043b\u0435\u0436\u0438\u0442 \u044d\u0442\u043e\u0439 \u0437\u043e\u043d\u0435",
       );
@@ -1195,14 +1436,22 @@ export const closeInventoryFn = createServerFn({ method: "POST" })
       { data: approvedProducts, error: productsError },
       { data: existingItems, error: itemsError },
     ] = await Promise.all([
-      sb.from("inventories").select("id,restaurant_id,status,area").eq("id", data.id).maybeSingle(),
+      sb
+        .from("inventories")
+        .select("id,restaurant_id,network_id,status,area")
+        .eq("id", data.id)
+        .maybeSingle(),
       sb
         .from("inventory_participants")
         .select("inventory_id,user_id")
         .eq("inventory_id", data.id)
         .eq("user_id", ctx.user.id)
         .maybeSingle(),
-      sb.from("products").select("id,area").eq("status", "approved"),
+      sb
+        .from("products")
+        .select("id,area")
+        .eq("network_id", requireNetworkId(ctx))
+        .eq("status", "approved"),
       sb.from("inventory_items").select("product_id").eq("inventory_id", data.id),
     ]);
     if (invError) throw new Error(invError.message);
@@ -1266,7 +1515,16 @@ export const addDiscrepancyFn = createServerFn({ method: "POST" })
     requireAccountingAccess(ctx);
 
     const { getBarstock } = await import("./barstock.server");
-    const { error } = await getBarstock().from("discrepancies").upsert(
+    const sb = getBarstock();
+    const { data: inventory, error: inventoryError } = await sb
+      .from("inventories")
+      .select("id,network_id")
+      .eq("id", data.inventory_id)
+      .maybeSingle();
+    if (inventoryError) throw new Error(inventoryError.message);
+    if (!inventory) throw new Error("Переучёт не найден");
+    assertSameNetwork(ctx, inventory.network_id);
+    const { error } = await sb.from("discrepancies").upsert(
       {
         inventory_id: data.inventory_id,
         amount: data.amount,
@@ -1284,6 +1542,7 @@ export const listClosedInventoriesFn = createServerFn({ method: "POST" })
       .extend({
         restaurant_id: z.string().uuid().nullable().optional(),
         area: inventoryAreaSchema.nullable().optional(),
+        ...networkFilterSchema,
       })
       .parse(input),
   )
@@ -1295,10 +1554,13 @@ export const listClosedInventoriesFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     let query = sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
+      .select("id,restaurant_id,network_id,status,created_at,created_by,area,correction_comment")
       .in("status", ["completed", "correction_required"])
       .order("created_at", { ascending: false });
 
+    if (ctx.user.role === "super_admin") {
+      if (data.network_id) query = query.eq("network_id", data.network_id);
+    } else query = query.eq("network_id", requireNetworkId(ctx));
     if (data.restaurant_id) query = query.eq("restaurant_id", data.restaurant_id);
     if (data.area) query = query.eq("area", data.area);
 
@@ -1317,11 +1579,12 @@ export const deleteInventoryFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: inv, error: invError } = await sb
       .from("inventories")
-      .select("id")
+      .select("id,network_id")
       .eq("id", data.id)
       .maybeSingle();
     if (invError) throw new Error(invError.message);
     if (!inv) throw new Error("Переучёт не найден");
+    assertSameNetwork(ctx, inv.network_id);
 
     const childDeletes = await Promise.all([
       sb.from("inventory_items").delete().eq("inventory_id", data.id),
@@ -1352,11 +1615,12 @@ export const requestInventoryCorrectionFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: inv, error: invError } = await sb
       .from("inventories")
-      .select("id,status")
+      .select("id,status,network_id")
       .eq("id", data.id)
       .maybeSingle();
     if (invError) throw new Error(invError.message);
     if (!inv) throw new Error("Переучёт не найден");
+    assertSameNetwork(ctx, inv.network_id);
     if (inv.status === "draft") {
       throw new Error("Черновик уже доступен бармену для редактирования");
     }
@@ -1381,29 +1645,14 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
     const { getBarstock } = await import("./barstock.server");
     const { classifyDiscrepancy } = await import("./expectedStock");
     const sb = getBarstock();
-    const [
-      { data: inv, error: e1 },
-      { data: restaurant },
-      { data: cats },
-      { data: prods },
-      { data: items },
-      { data: expected },
-      { data: discrepancy },
-    ] = await Promise.all([
-      sb
-        .from("inventories")
-        .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
-        .eq("id", data.id)
-        .maybeSingle(),
-      sb.from("inventories").select("restaurants(id,name)").eq("id", data.id).maybeSingle(),
-      sb.from("categories").select("id,name,area").order("name"),
-      sb.from("products").select("id,name,unit,category_id,status,unit_price,area").order("name"),
-      sb.from("inventory_items").select("product_id,quantity").eq("inventory_id", data.id),
-      sb.from("expected_items").select("product_id,quantity").eq("inventory_id", data.id),
-      sb.from("discrepancies").select("comment").eq("inventory_id", data.id).maybeSingle(),
-    ]);
+    const { data: inv, error: e1 } = await sb
+      .from("inventories")
+      .select("id,restaurant_id,network_id,status,created_at,created_by,area,correction_comment")
+      .eq("id", data.id)
+      .maybeSingle();
     if (e1) throw new Error(e1.message);
     if (!inv) throw new Error("Переучёт не найден");
+    assertSameNetwork(ctx, inv.network_id);
     if (ctx.user.role === "manager") {
       if (inv.status !== "completed")
         throw new Error("Управляющему доступны только закрытые отчёты");
@@ -1411,6 +1660,27 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
         throw new Error("Нет доступа к отчёту другого ресторана");
       }
     }
+    const [
+      { data: restaurant },
+      { data: network },
+      { data: cats },
+      { data: prods },
+      { data: items },
+      { data: expected },
+      { data: discrepancy },
+    ] = await Promise.all([
+      sb.from("restaurants").select("id,name").eq("id", inv.restaurant_id).maybeSingle(),
+      sb.from("restaurant_networks").select("id,name").eq("id", inv.network_id).maybeSingle(),
+      sb.from("categories").select("id,name,area").eq("network_id", inv.network_id).order("name"),
+      sb
+        .from("products")
+        .select("id,name,unit,category_id,status,unit_price,area")
+        .eq("network_id", inv.network_id)
+        .order("name"),
+      sb.from("inventory_items").select("product_id,quantity").eq("inventory_id", data.id),
+      sb.from("expected_items").select("product_id,quantity").eq("inventory_id", data.id),
+      sb.from("discrepancies").select("comment").eq("inventory_id", data.id).maybeSingle(),
+    ]);
 
     const actualMap = new Map<string, number>();
     (items ?? []).forEach((it) => actualMap.set(it.product_id, Number(it.quantity)));
@@ -1442,9 +1712,8 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
       });
     return {
       inventory: inv,
-      restaurant: Array.isArray(restaurant?.restaurants)
-        ? (restaurant.restaurants[0] ?? null)
-        : (restaurant?.restaurants ?? null),
+      restaurant: restaurant ?? null,
+      network: network ?? null,
       categories: cats ?? [],
       rows,
     };
@@ -1457,6 +1726,7 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
         month: z.string().regex(/^\d{4}-\d{2}$/),
         restaurant_id: z.string().uuid().nullable().optional(),
         area: inventoryAreaSchema.nullable().optional(),
+        ...networkFilterSchema,
       })
       .parse(input),
   )
@@ -1473,11 +1743,14 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
 
     let inventoryQuery = sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
+      .select("id,restaurant_id,network_id,status,created_at,created_by,area,correction_comment")
       .in("status", ["completed", "correction_required"])
       .gte("created_at", start.toISOString())
       .lt("created_at", end.toISOString())
       .order("created_at", { ascending: true });
+    if (ctx.user.role === "super_admin") {
+      if (data.network_id) inventoryQuery = inventoryQuery.eq("network_id", data.network_id);
+    } else inventoryQuery = inventoryQuery.eq("network_id", requireNetworkId(ctx));
     if (data.restaurant_id) inventoryQuery = inventoryQuery.eq("restaurant_id", data.restaurant_id);
     if (data.area) inventoryQuery = inventoryQuery.eq("area", data.area);
 
@@ -1488,6 +1761,7 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
     const restaurantIds = Array.from(
       new Set(invs.map((inventory) => inventory.restaurant_id).filter(Boolean)),
     );
+    const networkIds = Array.from(new Set(invs.map((inventory) => inventory.network_id)));
 
     const [
       { data: restaurants, error: restaurantsError },
@@ -1495,12 +1769,21 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
       { data: products, error: productsError },
       { data: items, error: itemsError },
       { data: expected, error: expectedError },
+      { data: networks, error: networksError },
     ] = await Promise.all([
       restaurantIds.length
         ? sb.from("restaurants").select("id,name").in("id", restaurantIds)
         : Promise.resolve({ data: [], error: null }),
-      sb.from("categories").select("id,name,area").order("name"),
-      sb.from("products").select("id,name,unit,category_id,status,unit_price,area").order("name"),
+      sb
+        .from("categories")
+        .select("id,name,area,network_id")
+        .in("network_id", networkIds)
+        .order("name"),
+      sb
+        .from("products")
+        .select("id,name,unit,category_id,status,unit_price,area,network_id")
+        .in("network_id", networkIds)
+        .order("name"),
       inventoryIds.length
         ? sb
             .from("inventory_items")
@@ -1513,17 +1796,22 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
             .select("inventory_id,product_id,quantity")
             .in("inventory_id", inventoryIds)
         : Promise.resolve({ data: [], error: null }),
+      networkIds.length
+        ? sb.from("restaurant_networks").select("id,name").in("id", networkIds)
+        : Promise.resolve({ data: [], error: null }),
     ]);
     if (restaurantsError) throw new Error(restaurantsError.message);
     if (categoriesError) throw new Error(categoriesError.message);
     if (productsError) throw new Error(productsError.message);
     if (itemsError) throw new Error(itemsError.message);
     if (expectedError) throw new Error(expectedError.message);
+    if (networksError) throw new Error(networksError.message);
 
     const restaurantById = new Map(
       (restaurants ?? []).map((restaurant) => [restaurant.id, restaurant]),
     );
     const productById = new Map((products ?? []).map((product) => [product.id, product]));
+    const networkById = new Map((networks ?? []).map((network) => [network.id, network]));
     const actualByInventory = new Map<string, Map<string, number>>();
     const expectedByInventory = new Map<string, Map<string, number>>();
 
@@ -1573,6 +1861,7 @@ export const getMonthlyArchiveFn = createServerFn({ method: "POST" })
         return {
           inventory,
           restaurant: restaurantById.get(inventory.restaurant_id) ?? null,
+          network: networkById.get(inventory.network_id) ?? null,
           rows,
         };
       }),
@@ -1600,11 +1889,14 @@ export const createWriteOffFn = createServerFn({ method: "POST" })
     const sb = getBarstock();
     const { data: product, error: productError } = await sb
       .from("products")
-      .select("id,area,status")
+      .select("id,area,status,network_id")
       .eq("id", data.product_id)
       .maybeSingle();
     if (productError) throw new Error(productError.message);
     if (!product) throw new Error("Товар не найден");
+    if (product.network_id !== requireNetworkId(ctx)) {
+      throw new Error("Товар относится к другой сети ресторанов");
+    }
     if ((product.area ?? "bar") !== area) {
       throw new Error("Нельзя списать товар другой зоны");
     }
@@ -1616,6 +1908,7 @@ export const createWriteOffFn = createServerFn({ method: "POST" })
       .from("write_offs")
       .insert({
         restaurant_id: ctx.user.restaurant_id,
+        network_id: requireNetworkId(ctx),
         area,
         product_id: product.id,
         user_id: ctx.user.id,
@@ -1639,11 +1932,14 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
     const isAccountant = ctx.user.role === "accountant" || ctx.user.role === "super_admin";
     let query = sb
       .from("write_offs")
-      .select("id,restaurant_id,area,product_id,user_id,quantity,reason,created_at")
+      .select("id,restaurant_id,network_id,area,product_id,user_id,quantity,reason,created_at")
       .order("created_at", { ascending: false })
       .limit(isAccountant ? 1_000 : 100);
 
     if (isAccountant) {
+      if (ctx.user.role === "super_admin") {
+        if (data.network_id) query = query.eq("network_id", data.network_id);
+      } else query = query.eq("network_id", requireNetworkId(ctx));
       if (data.restaurant_id) query = query.eq("restaurant_id", data.restaurant_id);
       if (data.area) query = query.eq("area", data.area);
       if (data.month) {
@@ -1656,6 +1952,7 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
       const area = requireOperationalRole(ctx);
       if (!ctx.user.restaurant_id) throw new Error("Пользователю не назначен ресторан");
       query = query
+        .eq("network_id", requireNetworkId(ctx))
         .eq("user_id", ctx.user.id)
         .eq("restaurant_id", ctx.user.restaurant_id)
         .eq("area", area);
@@ -1668,6 +1965,7 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
     const productIds = Array.from(new Set(rows.map((row) => row.product_id)));
     const userIds = Array.from(new Set(rows.map((row) => row.user_id)));
     const restaurantIds = Array.from(new Set(rows.map((row) => row.restaurant_id)));
+    const networkIds = Array.from(new Set(rows.map((row) => row.network_id)));
     const operationalArea = isAccountant ? null : requireOperationalRole(ctx);
 
     const [
@@ -1676,6 +1974,7 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
       usedRestaurantsResult,
       availableProductsResult,
       restaurantsResult,
+      networksResult,
     ] = await Promise.all([
       productIds.length
         ? sb.from("products").select("id,name,unit,unit_price").in("id", productIds)
@@ -1690,12 +1989,25 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
         ? sb
             .from("products")
             .select("id,name,unit")
+            .eq("network_id", requireNetworkId(ctx))
             .eq("area", operationalArea)
             .eq("status", "approved")
             .order("name")
         : Promise.resolve({ data: [], error: null }),
       isAccountant
-        ? sb.from("restaurants").select("id,name").order("name")
+        ? ctx.user.role === "super_admin" && !data.network_id
+          ? sb.from("restaurants").select("id,name,network_id").order("name")
+          : sb
+              .from("restaurants")
+              .select("id,name,network_id")
+              .eq(
+                "network_id",
+                ctx.user.role === "super_admin" ? data.network_id! : requireNetworkId(ctx),
+              )
+              .order("name")
+        : Promise.resolve({ data: [], error: null }),
+      networkIds.length
+        ? sb.from("restaurant_networks").select("id,name").in("id", networkIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
 
@@ -1705,6 +2017,7 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
       usedRestaurantsResult,
       availableProductsResult,
       restaurantsResult,
+      networksResult,
     ]) {
       if (result.error) throw new Error(result.error.message);
     }
@@ -1714,6 +2027,7 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
     const restaurantById = new Map(
       (usedRestaurantsResult.data ?? []).map((row) => [row.id, row.name]),
     );
+    const networkById = new Map((networksResult.data ?? []).map((row) => [row.id, row.name]));
 
     return {
       write_offs: rows.map((row) => {
@@ -1729,6 +2043,7 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
           amount: isAccountant ? quantity * unitPrice : null,
           user_name: userById.get(row.user_id) ?? "Неизвестный пользователь",
           restaurant_name: restaurantById.get(row.restaurant_id) ?? "Без названия",
+          network_name: networkById.get(row.network_id) ?? "Без сети",
         };
       }),
       products: availableProductsResult.data ?? [],
@@ -1743,6 +2058,7 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
         month: z.string().regex(/^\d{4}-\d{2}$/),
         restaurant_id: z.string().uuid().nullable().optional(),
         area: inventoryAreaSchema.nullable().optional(),
+        ...networkFilterSchema,
       })
       .parse(input),
   )
@@ -1757,10 +2073,12 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
     const end = new Date(Date.UTC(year, month, 1));
     const fixedRestaurantId = ctx.user.role === "manager" ? ctx.user.restaurant_id : null;
     const effectiveRestaurantId = fixedRestaurantId ?? data.restaurant_id ?? null;
+    const effectiveNetworkId =
+      ctx.user.role === "super_admin" ? (data.network_id ?? null) : requireNetworkId(ctx);
 
     let inventoryQuery = sb
       .from("inventories")
-      .select("id,restaurant_id,status,created_at,created_by,area")
+      .select("id,restaurant_id,network_id,status,created_at,created_by,area")
       .eq("status", "completed")
       .gte("created_at", start.toISOString())
       .lt("created_at", end.toISOString())
@@ -1768,33 +2086,53 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
     if (effectiveRestaurantId) {
       inventoryQuery = inventoryQuery.eq("restaurant_id", effectiveRestaurantId);
     }
+    if (effectiveNetworkId) inventoryQuery = inventoryQuery.eq("network_id", effectiveNetworkId);
     if (data.area) inventoryQuery = inventoryQuery.eq("area", data.area);
 
     let writeOffQuery = sb
       .from("write_offs")
-      .select("id,restaurant_id,area,product_id,user_id,quantity,reason,created_at")
+      .select("id,restaurant_id,network_id,area,product_id,user_id,quantity,reason,created_at")
       .gte("created_at", start.toISOString())
       .lt("created_at", end.toISOString())
       .order("created_at", { ascending: false });
     if (effectiveRestaurantId) {
       writeOffQuery = writeOffQuery.eq("restaurant_id", effectiveRestaurantId);
     }
+    if (effectiveNetworkId) writeOffQuery = writeOffQuery.eq("network_id", effectiveNetworkId);
     if (data.area) writeOffQuery = writeOffQuery.eq("area", data.area);
 
     const [
       { data: inventories, error: inventoriesError },
       { data: writeOffs, error: writeOffsError },
       restaurantsResult,
+      networksResult,
     ] = await Promise.all([
       inventoryQuery,
       writeOffQuery,
       fixedRestaurantId
-        ? sb.from("restaurants").select("id,name").eq("id", fixedRestaurantId).order("name")
-        : sb.from("restaurants").select("id,name").order("name"),
+        ? sb
+            .from("restaurants")
+            .select("id,name,network_id")
+            .eq("id", fixedRestaurantId)
+            .order("name")
+        : effectiveNetworkId
+          ? sb
+              .from("restaurants")
+              .select("id,name,network_id")
+              .eq("network_id", effectiveNetworkId)
+              .order("name")
+          : sb.from("restaurants").select("id,name,network_id").order("name"),
+      ctx.user.role === "super_admin"
+        ? sb.from("restaurant_networks").select("id,name,is_active").order("name")
+        : sb
+            .from("restaurant_networks")
+            .select("id,name,is_active")
+            .eq("id", requireNetworkId(ctx)),
     ]);
     if (inventoriesError) throw new Error(inventoriesError.message);
     if (writeOffsError) throw new Error(writeOffsError.message);
     if (restaurantsResult.error) throw new Error(restaurantsResult.error.message);
+    if (networksResult.error) throw new Error(networksResult.error.message);
 
     const invs = inventories ?? [];
     const inventoryIds = invs.map((inventory) => inventory.id);
@@ -2040,6 +2378,8 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
     return {
       month: data.month,
       scope_restaurant_id: fixedRestaurantId,
+      scope_network_id: effectiveNetworkId,
+      networks: networksResult.data ?? [],
       restaurants: restaurantsResult.data ?? [],
       summary: {
         inventories: invs.length,
@@ -2079,26 +2419,39 @@ export const listExpectedFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
-    const [{ data: inv, error: e1 }, { data: cats }, { data: prods }, { data: expected }] =
-      await Promise.all([
-        sb
-          .from("inventories")
-          .select("id,restaurant_id,status,created_at,created_by,area,correction_comment")
-          .eq("id", data.id)
-          .maybeSingle(),
-        sb.from("categories").select("id,name,area").order("name"),
-        sb.from("products").select("id,name,unit,category_id,status,area").order("name"),
-        sb.from("expected_items").select("product_id,quantity").eq("inventory_id", data.id),
-      ]);
+    const { data: inv, error: e1 } = await sb
+      .from("inventories")
+      .select("id,restaurant_id,network_id,status,created_at,created_by,area,correction_comment")
+      .eq("id", data.id)
+      .maybeSingle();
     if (e1) throw new Error(e1.message);
     if (!inv) throw new Error("Переучёт не найден");
+    assertSameNetwork(ctx, inv.network_id);
+
+    const [{ data: cats, error: catsError }, { data: prods, error: prodsError }, expectedResult] =
+      await Promise.all([
+        sb
+          .from("categories")
+          .select("id,name,area,network_id")
+          .eq("network_id", inv.network_id)
+          .order("name"),
+        sb
+          .from("products")
+          .select("id,name,unit,category_id,status,area,network_id")
+          .eq("network_id", inv.network_id)
+          .order("name"),
+        sb.from("expected_items").select("product_id,quantity").eq("inventory_id", data.id),
+      ]);
+    if (catsError) throw new Error(catsError.message);
+    if (prodsError) throw new Error(prodsError.message);
+    if (expectedResult.error) throw new Error(expectedResult.error.message);
     return {
       inventory: inv,
       categories: (cats ?? []).filter(
         (category) => (category.area ?? "bar") === (inv.area ?? "bar"),
       ),
       products: (prods ?? []).filter((product) => (product.area ?? "bar") === (inv.area ?? "bar")),
-      expected: expected ?? [],
+      expected: expectedResult.data ?? [],
     };
   });
 
@@ -2118,6 +2471,19 @@ export const upsertExpectedFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
+    const [{ data: inventory, error: inventoryError }, { data: product, error: productError }] =
+      await Promise.all([
+        sb.from("inventories").select("id,network_id").eq("id", data.inventory_id).maybeSingle(),
+        sb.from("products").select("id,network_id").eq("id", data.product_id).maybeSingle(),
+      ]);
+    if (inventoryError) throw new Error(inventoryError.message);
+    if (productError) throw new Error(productError.message);
+    if (!inventory) throw new Error("Переучёт не найден");
+    if (!product) throw new Error("Товар не найден");
+    assertSameNetwork(ctx, inventory.network_id);
+    if (product.network_id !== inventory.network_id) {
+      throw new Error("Товар относится к другой сети ресторанов");
+    }
     const { error } = await sb.from("expected_items").upsert(
       {
         inventory_id: data.inventory_id,
@@ -2155,6 +2521,25 @@ export const bulkSetExpectedFn = createServerFn({ method: "POST" })
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
+    const { data: inventory, error: inventoryError } = await sb
+      .from("inventories")
+      .select("id,network_id")
+      .eq("id", data.inventory_id)
+      .maybeSingle();
+    if (inventoryError) throw new Error(inventoryError.message);
+    if (!inventory) throw new Error("Переучёт не найден");
+    assertSameNetwork(ctx, inventory.network_id);
+
+    const productIds = Array.from(new Set(data.items.map((item) => item.product_id)));
+    const { data: products, error: productsError } = await sb
+      .from("products")
+      .select("id")
+      .eq("network_id", inventory.network_id)
+      .in("id", productIds);
+    if (productsError) throw new Error(productsError.message);
+    if ((products ?? []).length !== productIds.length) {
+      throw new Error("Один или несколько товаров относятся к другой сети ресторанов");
+    }
     if (data.replace) {
       const { error: delErr } = await sb
         .from("expected_items")
@@ -2183,6 +2568,7 @@ async function enrichInventoryRows(
   const ids = invs.map((i) => i.id);
   const userIds = Array.from(new Set(invs.map((i) => i.created_by).filter(Boolean) as string[]));
   const restaurantIds = Array.from(new Set(invs.map((i) => i.restaurant_id).filter(Boolean)));
+  const networkIds = Array.from(new Set(invs.map((i) => i.network_id).filter(Boolean)));
 
   let users: Record<string, string> = {};
   if (userIds.length) {
@@ -2194,6 +2580,15 @@ async function enrichInventoryRows(
   if (includeRestaurants && restaurantIds.length) {
     const { data: rs } = await sb.from("restaurants").select("id,name").in("id", restaurantIds);
     restaurants = Object.fromEntries((rs ?? []).map((r) => [r.id, r.name]));
+  }
+
+  let networks: Record<string, string> = {};
+  if (includeRestaurants && networkIds.length) {
+    const { data: ns } = await sb
+      .from("restaurant_networks")
+      .select("id,name")
+      .in("id", networkIds);
+    networks = Object.fromEntries((ns ?? []).map((network) => [network.id, network.name]));
   }
 
   let counts: Record<string, number> = {};
@@ -2212,6 +2607,7 @@ async function enrichInventoryRows(
     ...i,
     created_by_name: i.created_by ? (users[i.created_by] ?? null) : null,
     restaurant_name: includeRestaurants ? (restaurants[i.restaurant_id] ?? null) : undefined,
+    network_name: includeRestaurants ? (networks[i.network_id] ?? null) : undefined,
     items_count: counts[i.id] ?? 0,
   }));
 }

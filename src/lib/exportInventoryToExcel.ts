@@ -32,6 +32,7 @@ type ExportRow = {
 
 export type ExportInventoryReport = {
   inventory: ExportInventory;
+  network?: { name?: string | null } | null;
   restaurant?: ExportRestaurant;
   categories: ExportCategory[];
   rows: ExportRow[];
@@ -41,7 +42,7 @@ type CellStyle = NonNullable<XLSX.CellObject["s"]>;
 
 const titleRowIndex = 0;
 const metaStartRowIndex = 2;
-const tableHeaderRowIndex = 7;
+const tableHeaderRowIndex = 8;
 const tableColumnCount = 10;
 
 const thinBlackBorder = {
@@ -156,6 +157,7 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
   const date = new Date(report.inventory.created_at);
   const categoryById = new Map(report.categories.map((category) => [category.id, category.name]));
   const restaurantName = report.restaurant?.name ?? "Ресторан";
+  const networkName = report.network?.name ?? "";
   const rows = report.rows.map((row) => ({
     ...row,
     categoryName: row.category_id ? (categoryById.get(row.category_id) ?? "") : "",
@@ -206,8 +208,9 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
 
   const summaryStartRowIndex = tableHeaderRowIndex + tableRows.length + 2;
   const sheetRows: Array<Array<string | number>> = [
-    ["ПЕРЕУЧЁТ БАРА"],
+    ["ПЕРЕУЧЁТ"],
     [],
+    ["Сеть ресторанов:", networkName],
     ["Ресторан:", restaurantName],
     ["Дата:", date.toLocaleString("ru-RU")],
     ["Статус:", translateInventoryStatus(report.inventory.status)],
@@ -241,7 +244,7 @@ export function exportInventoryToExcel(report: ExportInventoryReport) {
 
   applyCellStyle(worksheet, titleRowIndex, 0, titleStyle);
 
-  for (let row = metaStartRowIndex; row < metaStartRowIndex + 4; row += 1) {
+  for (let row = metaStartRowIndex; row < metaStartRowIndex + 5; row += 1) {
     applyCellStyle(worksheet, row, 0, metaLabelStyle);
     applyCellStyle(worksheet, row, 1, metaValueStyle);
   }

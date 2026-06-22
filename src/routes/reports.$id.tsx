@@ -151,6 +151,10 @@ function ReportPage() {
           })}
         </h1>
         <div className="mt-2 flex flex-wrap items-center gap-2">
+          {data.network?.name && <Badge variant="outline">Сеть: {data.network.name}</Badge>}
+          {data.restaurant?.name && (
+            <Badge variant="outline">Ресторан: {data.restaurant.name}</Badge>
+          )}
           <Badge variant={isCorrectionRequired ? "default" : "secondary"}>
             {inventoryStatusLabel(inventory.status)}
           </Badge>

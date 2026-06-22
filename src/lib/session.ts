@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 
 export type BarstockSession = {
-  user: { id: string; name: string; login: string; role: string; restaurant_id: string | null };
+  user: {
+    id: string;
+    name: string;
+    login: string;
+    role: string;
+    restaurant_id: string | null;
+    network_id: string | null;
+  };
+  network: { id: string; name: string; is_active?: boolean } | null;
   restaurant: { id: string; name: string } | null;
   session_token: string;
 };

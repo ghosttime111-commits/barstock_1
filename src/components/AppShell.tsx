@@ -2,6 +2,7 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import {
+  ArrowRightLeft,
   BarChart3,
   ClipboardCheck,
   ClipboardList,
@@ -38,6 +39,7 @@ type NavigationPath =
   | "/inventories"
   | "/reports"
   | "/write-offs"
+  | "/transfers"
   | "/admin"
   | "/manager"
   | "/security";
@@ -54,6 +56,11 @@ const writeOffsItem: NavigationItem = {
   to: "/write-offs",
   icon: ReceiptText,
 };
+const transfersItem: NavigationItem = {
+  label: "Перемещения",
+  to: "/transfers",
+  icon: ArrowRightLeft,
+};
 const adminItem: NavigationItem = { label: "Управление", to: "/admin", icon: Settings };
 const managerItem: NavigationItem = { label: "Статистика", to: "/manager", icon: BarChart3 };
 const securityItem: NavigationItem = {
@@ -63,11 +70,11 @@ const securityItem: NavigationItem = {
 };
 
 const navigationByRole: Record<AllowedRole, NavigationItem[]> = {
-  bartender: [inventoriesItem, writeOffsItem],
-  kitchen_manager: [inventoriesItem, writeOffsItem],
-  accountant: [reportsItem, writeOffsItem, adminItem, managerItem],
-  manager: [managerItem],
-  super_admin: [adminItem, reportsItem, writeOffsItem, managerItem, securityItem],
+  bartender: [inventoriesItem, writeOffsItem, transfersItem],
+  kitchen_manager: [inventoriesItem, writeOffsItem, transfersItem],
+  accountant: [reportsItem, writeOffsItem, transfersItem, adminItem, managerItem],
+  manager: [managerItem, transfersItem],
+  super_admin: [adminItem, reportsItem, writeOffsItem, transfersItem, managerItem, securityItem],
 };
 
 function homePathForRole(role: string) {

@@ -8,6 +8,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const PASSWORD_ITERATIONS = 210_000;
 const productUnitSchema = z.enum(["л", "кг", "шт", "бут"]);
 const productStatusSchema = z.enum(["approved", "pending", "archived"]);
+const stockTransferStatusSchema = z.enum(["sent", "delivered", "cancelled"]);
 const staffRoleSchema = z.enum([
   "bartender",
   "kitchen_manager",
@@ -26,6 +27,17 @@ const writeOffFiltersSchema = sessionSchema.extend({
     .optional(),
   restaurant_id: z.string().uuid().nullable().optional(),
   area: inventoryAreaSchema.nullable().optional(),
+  network_id: z.string().uuid().nullable().optional(),
+});
+const stockTransferFiltersSchema = sessionSchema.extend({
+  month: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/)
+    .nullable()
+    .optional(),
+  restaurant_id: z.string().uuid().nullable().optional(),
+  area: inventoryAreaSchema.nullable().optional(),
+  status: stockTransferStatusSchema.nullable().optional(),
   network_id: z.string().uuid().nullable().optional(),
 });
 const networkFilterSchema = { network_id: z.string().uuid().nullable().optional() };
@@ -2048,6 +2060,334 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
       }),
       products: availableProductsResult.data ?? [],
       restaurants: restaurantsResult.data ?? [],
+    };
+  });
+
+export const createStockTransferFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        product_id: z.string().uuid(),
+        quantity: z.number().positive().max(1_000_000),
+        to_restaurant_id: z.string().uuid(),
+        comment: z.string().trim().max(1_000).nullable().optional(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    const area = requireOperationalRole(ctx);
+    const networkId = requireNetworkId(ctx);
+    const fromRestaurantId = ctx.user.restaurant_id;
+    if (!fromRestaurantId) {
+      throw new Error("Пользователю не назначен ресторан");
+    }
+    if (fromRestaurantId === data.to_restaurant_id) {
+      throw new Error("Нельзя переместить товар в тот же ресторан");
+    }
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const [productResult, fromRestaurantResult, toRestaurantResult] = await Promise.all([
+      sb
+        .from("products")
+        .select("id,area,status,network_id")
+        .eq("id", data.product_id)
+        .maybeSingle(),
+      sb.from("restaurants").select("id,network_id").eq("id", fromRestaurantId).maybeSingle(),
+      sb.from("restaurants").select("id,network_id").eq("id", data.to_restaurant_id).maybeSingle(),
+    ]);
+    if (productResult.error) throw new Error(productResult.error.message);
+    if (fromRestaurantResult.error) throw new Error(fromRestaurantResult.error.message);
+    if (toRestaurantResult.error) throw new Error(toRestaurantResult.error.message);
+    if (!productResult.data) throw new Error("Товар не найден");
+    if (!fromRestaurantResult.data) throw new Error("Ресторан отправителя не найден");
+    if (!toRestaurantResult.data) throw new Error("Ресторан получателя не найден");
+    if (
+      productResult.data.network_id !== networkId ||
+      fromRestaurantResult.data.network_id !== networkId ||
+      toRestaurantResult.data.network_id !== networkId
+    ) {
+      throw new Error("Перемещение между разными сетями запрещено");
+    }
+    if ((productResult.data.area ?? "bar") !== area) {
+      throw new Error("Нельзя переместить товар другой зоны");
+    }
+    if (productResult.data.status !== "approved") {
+      throw new Error("Можно перемещать только активные товары");
+    }
+
+    const { data: transfer, error } = await sb
+      .from("stock_transfers")
+      .insert({
+        network_id: networkId,
+        from_restaurant_id: fromRestaurantId,
+        to_restaurant_id: data.to_restaurant_id,
+        area,
+        product_id: data.product_id,
+        quantity: data.quantity,
+        status: "sent",
+        sent_by: ctx.user.id,
+        comment: data.comment || null,
+      })
+      .select("id,status,sent_at")
+      .single();
+    if (error) throw new Error(error.message);
+    return transfer;
+  });
+
+export const markStockTransferDeliveredFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema
+      .extend({
+        transfer_id: z.string().uuid(),
+        delivery_comment: z.string().trim().max(1_000).nullable().optional(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    const area = requireOperationalRole(ctx);
+    if (!ctx.user.restaurant_id) {
+      throw new Error("Пользователю не назначен ресторан");
+    }
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { data: transfer, error: transferError } = await sb
+      .from("stock_transfers")
+      .select("id,network_id,to_restaurant_id,area,status")
+      .eq("id", data.transfer_id)
+      .maybeSingle();
+    if (transferError) throw new Error(transferError.message);
+    if (!transfer) throw new Error("Перемещение не найдено");
+    assertSameNetwork(ctx, transfer.network_id);
+    if (transfer.to_restaurant_id !== ctx.user.restaurant_id) {
+      throw new Error("Подтвердить доставку может только ресторан-получатель");
+    }
+    if ((transfer.area ?? "bar") !== area) {
+      throw new Error("Нет доступа к перемещению другой зоны");
+    }
+    if (transfer.status !== "sent") {
+      throw new Error("Это перемещение уже обработано");
+    }
+
+    const { data: updated, error } = await sb
+      .from("stock_transfers")
+      .update({
+        status: "delivered",
+        delivered_by: ctx.user.id,
+        delivered_at: new Date().toISOString(),
+        delivery_comment: data.delivery_comment || null,
+      })
+      .eq("id", data.transfer_id)
+      .eq("status", "sent")
+      .select("id,status,delivered_at")
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!updated) throw new Error("Перемещение уже обработано другим пользователем");
+    return updated;
+  });
+
+export const cancelStockTransferFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => sessionSchema.extend({ transfer_id: z.string().uuid() }).parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, ["bartender", "kitchen_manager", "accountant", "super_admin"]);
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const { data: transfer, error: transferError } = await sb
+      .from("stock_transfers")
+      .select("id,network_id,from_restaurant_id,area,sent_by,status")
+      .eq("id", data.transfer_id)
+      .maybeSingle();
+    if (transferError) throw new Error(transferError.message);
+    if (!transfer) throw new Error("Перемещение не найдено");
+    assertSameNetwork(ctx, transfer.network_id);
+    if (transfer.status !== "sent") {
+      throw new Error("Отменить можно только отправленное перемещение");
+    }
+
+    if (ctx.user.role === "bartender" || ctx.user.role === "kitchen_manager") {
+      const area = requireOperationalRole(ctx);
+      if (
+        transfer.sent_by !== ctx.user.id ||
+        transfer.from_restaurant_id !== ctx.user.restaurant_id ||
+        (transfer.area ?? "bar") !== area
+      ) {
+        throw new Error("Можно отменить только своё исходящее перемещение");
+      }
+    }
+
+    const { data: updated, error } = await sb
+      .from("stock_transfers")
+      .update({ status: "cancelled" })
+      .eq("id", data.transfer_id)
+      .eq("status", "sent")
+      .select("id,status")
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!updated) throw new Error("Перемещение уже обработано другим пользователем");
+    return updated;
+  });
+
+export const listStockTransfersFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => stockTransferFiltersSchema.parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, ["bartender", "kitchen_manager", "accountant", "manager", "super_admin"]);
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const isOperational = ctx.user.role === "bartender" || ctx.user.role === "kitchen_manager";
+    const ownNetworkId = ctx.user.role === "super_admin" ? null : requireNetworkId(ctx);
+    const effectiveNetworkId =
+      ctx.user.role === "super_admin" ? (data.network_id ?? null) : ownNetworkId;
+
+    let query = sb
+      .from("stock_transfers")
+      .select(
+        "id,network_id,from_restaurant_id,to_restaurant_id,area,product_id,quantity,status,sent_by,delivered_by,sent_at,delivered_at,comment,delivery_comment",
+      )
+      .order("sent_at", { ascending: false })
+      .limit(1_000);
+
+    if (effectiveNetworkId) query = query.eq("network_id", effectiveNetworkId);
+
+    if (isOperational) {
+      const area = requireOperationalRole(ctx);
+      if (!ctx.user.restaurant_id) throw new Error("Пользователю не назначен ресторан");
+      query = query
+        .eq("area", area)
+        .or(
+          `from_restaurant_id.eq.${ctx.user.restaurant_id},to_restaurant_id.eq.${ctx.user.restaurant_id}`,
+        );
+    } else {
+      const fixedRestaurantId = ctx.user.role === "manager" ? ctx.user.restaurant_id : null;
+      const restaurantId = fixedRestaurantId ?? data.restaurant_id ?? null;
+      if (restaurantId) {
+        query = query.or(
+          `from_restaurant_id.eq.${restaurantId},to_restaurant_id.eq.${restaurantId}`,
+        );
+      }
+      if (data.area) query = query.eq("area", data.area);
+    }
+
+    if (data.status) query = query.eq("status", data.status);
+    if (data.month) {
+      const [year, month] = data.month.split("-").map(Number);
+      const start = new Date(Date.UTC(year, month - 1, 1));
+      const end = new Date(Date.UTC(year, month, 1));
+      query = query.gte("sent_at", start.toISOString()).lt("sent_at", end.toISOString());
+    }
+
+    const { data: transfers, error } = await query;
+    if (error) throw new Error(error.message);
+    const rows = transfers ?? [];
+    const productIds = Array.from(new Set(rows.map((row) => row.product_id)));
+    const restaurantIds = Array.from(
+      new Set(rows.flatMap((row) => [row.from_restaurant_id, row.to_restaurant_id])),
+    );
+    const userIds = Array.from(
+      new Set(
+        rows
+          .flatMap((row) => [row.sent_by, row.delivered_by])
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    const networkIds = Array.from(new Set(rows.map((row) => row.network_id)));
+
+    const [
+      productsResult,
+      usedRestaurantsResult,
+      usersResult,
+      usedNetworksResult,
+      availableProductsResult,
+      availableRestaurantsResult,
+      networksResult,
+    ] = await Promise.all([
+      productIds.length
+        ? sb.from("products").select("id,name,unit").in("id", productIds)
+        : Promise.resolve({ data: [], error: null }),
+      restaurantIds.length
+        ? sb.from("restaurants").select("id,name").in("id", restaurantIds)
+        : Promise.resolve({ data: [], error: null }),
+      userIds.length
+        ? sb.from("users").select("id,name").in("id", userIds)
+        : Promise.resolve({ data: [], error: null }),
+      networkIds.length
+        ? sb.from("restaurant_networks").select("id,name").in("id", networkIds)
+        : Promise.resolve({ data: [], error: null }),
+      isOperational
+        ? sb
+            .from("products")
+            .select("id,name,unit")
+            .eq("network_id", ownNetworkId!)
+            .eq("area", requireOperationalRole(ctx))
+            .eq("status", "approved")
+            .order("name")
+        : Promise.resolve({ data: [], error: null }),
+      isOperational
+        ? sb
+            .from("restaurants")
+            .select("id,name,network_id")
+            .eq("network_id", ownNetworkId!)
+            .neq("id", ctx.user.restaurant_id!)
+            .order("name")
+        : effectiveNetworkId
+          ? sb
+              .from("restaurants")
+              .select("id,name,network_id")
+              .eq("network_id", effectiveNetworkId)
+              .order("name")
+          : sb.from("restaurants").select("id,name,network_id").order("name"),
+      ctx.user.role === "super_admin"
+        ? sb.from("restaurant_networks").select("id,name,is_active").order("name")
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    for (const result of [
+      productsResult,
+      usedRestaurantsResult,
+      usersResult,
+      usedNetworksResult,
+      availableProductsResult,
+      availableRestaurantsResult,
+      networksResult,
+    ]) {
+      if (result.error) throw new Error(result.error.message);
+    }
+
+    const productById = new Map((productsResult.data ?? []).map((row) => [row.id, row]));
+    const restaurantById = new Map(
+      (usedRestaurantsResult.data ?? []).map((row) => [row.id, row.name]),
+    );
+    const userById = new Map((usersResult.data ?? []).map((row) => [row.id, row.name]));
+    const networkById = new Map((usedNetworksResult.data ?? []).map((row) => [row.id, row.name]));
+
+    return {
+      transfers: rows.map((row) => {
+        const product = productById.get(row.product_id);
+        return {
+          ...row,
+          quantity: Number(row.quantity),
+          product_name: product?.name ?? "Неизвестный товар",
+          unit: product?.unit ?? "",
+          from_restaurant_name:
+            restaurantById.get(row.from_restaurant_id) ?? "Неизвестный ресторан",
+          to_restaurant_name: restaurantById.get(row.to_restaurant_id) ?? "Неизвестный ресторан",
+          sent_by_name: userById.get(row.sent_by) ?? "Неизвестный пользователь",
+          delivered_by_name: row.delivered_by
+            ? (userById.get(row.delivered_by) ?? "Неизвестный пользователь")
+            : null,
+          network_name: networkById.get(row.network_id) ?? "Неизвестная сеть",
+        };
+      }),
+      products: availableProductsResult.data ?? [],
+      restaurants: availableRestaurantsResult.data ?? [],
+      networks: networksResult.data ?? [],
+      scope_restaurant_id: ctx.user.role === "manager" ? ctx.user.restaurant_id : null,
     };
   });
 

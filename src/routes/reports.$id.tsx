@@ -2,7 +2,14 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { ArrowLeft, Download, FileSpreadsheet, RotateCcw, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRightLeft,
+  Download,
+  FileSpreadsheet,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -164,13 +171,22 @@ function ReportPage() {
           )}
         </div>
         {isAccountant && (
-          <Link
-            to="/reports/expected/$id"
-            params={{ id: inventory.id }}
-            className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
-          >
-            <FileSpreadsheet className="size-4" /> Учётные остатки (заполнить / импорт Excel)
-          </Link>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+            <Link
+              to="/reports/expected/$id"
+              params={{ id: inventory.id }}
+              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+            >
+              <FileSpreadsheet className="size-4" /> Учётные остатки (заполнить / импорт Excel)
+            </Link>
+            <Link
+              to="/transfers"
+              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+            >
+              <ArrowRightLeft className="size-4" />
+              Перемещения за период
+            </Link>
+          </div>
         )}
       </div>
 

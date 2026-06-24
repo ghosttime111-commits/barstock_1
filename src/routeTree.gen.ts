@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as WriteOffsRouteImport } from './routes/write-offs'
+import { Route as TransfersRouteImport } from './routes/transfers'
 import { Route as SecurityRouteImport } from './routes/security'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as ManagerRouteImport } from './routes/manager'
@@ -26,6 +27,11 @@ import { Route as ReportsExpectedIdRouteImport } from './routes/reports.expected
 const WriteOffsRoute = WriteOffsRouteImport.update({
   id: '/write-offs',
   path: '/write-offs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TransfersRoute = TransfersRouteImport.update({
+  id: '/transfers',
+  path: '/transfers',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SecurityRoute = SecurityRouteImport.update({
@@ -97,6 +103,7 @@ export interface FileRoutesByFullPath {
   '/manager': typeof ManagerRoute
   '/reports': typeof ReportsRouteWithChildren
   '/security': typeof SecurityRoute
+  '/transfers': typeof TransfersRoute
   '/write-offs': typeof WriteOffsRoute
   '/inventories/$id': typeof InventoriesIdRoute
   '/reports/$id': typeof ReportsIdRoute
@@ -110,6 +117,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
   '/security': typeof SecurityRoute
+  '/transfers': typeof TransfersRoute
   '/write-offs': typeof WriteOffsRoute
   '/inventories/$id': typeof InventoriesIdRoute
   '/reports/$id': typeof ReportsIdRoute
@@ -126,6 +134,7 @@ export interface FileRoutesById {
   '/manager': typeof ManagerRoute
   '/reports': typeof ReportsRouteWithChildren
   '/security': typeof SecurityRoute
+  '/transfers': typeof TransfersRoute
   '/write-offs': typeof WriteOffsRoute
   '/inventories/$id': typeof InventoriesIdRoute
   '/reports/$id': typeof ReportsIdRoute
@@ -143,6 +152,7 @@ export interface FileRouteTypes {
     | '/manager'
     | '/reports'
     | '/security'
+    | '/transfers'
     | '/write-offs'
     | '/inventories/$id'
     | '/reports/$id'
@@ -156,6 +166,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/manager'
     | '/security'
+    | '/transfers'
     | '/write-offs'
     | '/inventories/$id'
     | '/reports/$id'
@@ -171,6 +182,7 @@ export interface FileRouteTypes {
     | '/manager'
     | '/reports'
     | '/security'
+    | '/transfers'
     | '/write-offs'
     | '/inventories/$id'
     | '/reports/$id'
@@ -187,6 +199,7 @@ export interface RootRouteChildren {
   ManagerRoute: typeof ManagerRoute
   ReportsRoute: typeof ReportsRouteWithChildren
   SecurityRoute: typeof SecurityRoute
+  TransfersRoute: typeof TransfersRoute
   WriteOffsRoute: typeof WriteOffsRoute
 }
 
@@ -197,6 +210,13 @@ declare module '@tanstack/react-router' {
       path: '/write-offs'
       fullPath: '/write-offs'
       preLoaderRoute: typeof WriteOffsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/transfers': {
+      id: '/transfers'
+      path: '/transfers'
+      fullPath: '/transfers'
+      preLoaderRoute: typeof TransfersRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/security': {
@@ -323,6 +343,7 @@ const rootRouteChildren: RootRouteChildren = {
   ManagerRoute: ManagerRoute,
   ReportsRoute: ReportsRouteWithChildren,
   SecurityRoute: SecurityRoute,
+  TransfersRoute: TransfersRoute,
   WriteOffsRoute: WriteOffsRoute,
 }
 export const routeTree = rootRouteImport

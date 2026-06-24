@@ -8,6 +8,7 @@ import {
   ClipboardList,
   LogOut,
   Menu,
+  MessageSquareText,
   ReceiptText,
   Settings,
   ShieldCheck,
@@ -25,7 +26,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { currentSessionFn } from "@/lib/barstock.functions";
+import { currentSessionFn, listAnnouncementsFn } from "@/lib/barstock.functions";
 import { setSession, useSession } from "@/lib/session";
 
 export type AllowedRole =
@@ -33,6 +34,7 @@ export type AllowedRole =
   | "accountant"
   | "kitchen_manager"
   | "manager"
+  | "bar_manager"
   | "super_admin";
 
 type NavigationPath =
@@ -40,6 +42,7 @@ type NavigationPath =
   | "/reports"
   | "/write-offs"
   | "/transfers"
+  | "/messages"
   | "/admin"
   | "/manager"
   | "/security";
@@ -61,6 +64,11 @@ const transfersItem: NavigationItem = {
   to: "/transfers",
   icon: ArrowRightLeft,
 };
+const messagesItem: NavigationItem = {
+  label: "Сообщения персоналу",
+  to: "/messages",
+  icon: MessageSquareText,
+};
 const adminItem: NavigationItem = { label: "Управление", to: "/admin", icon: Settings };
 const managerItem: NavigationItem = { label: "Статистика", to: "/manager", icon: BarChart3 };
 const securityItem: NavigationItem = {
@@ -70,17 +78,26 @@ const securityItem: NavigationItem = {
 };
 
 const navigationByRole: Record<AllowedRole, NavigationItem[]> = {
-  bartender: [inventoriesItem, writeOffsItem, transfersItem],
-  kitchen_manager: [inventoriesItem, writeOffsItem, transfersItem],
-  accountant: [reportsItem, writeOffsItem, transfersItem, adminItem, managerItem],
-  manager: [managerItem, transfersItem],
-  super_admin: [adminItem, reportsItem, writeOffsItem, transfersItem, managerItem, securityItem],
+  bartender: [inventoriesItem, writeOffsItem, transfersItem, messagesItem],
+  kitchen_manager: [inventoriesItem, writeOffsItem, transfersItem, messagesItem],
+  accountant: [reportsItem, writeOffsItem, transfersItem, adminItem, managerItem, messagesItem],
+  manager: [managerItem, transfersItem, messagesItem],
+  bar_manager: [reportsItem, writeOffsItem, transfersItem, managerItem, messagesItem],
+  super_admin: [
+    adminItem,
+    reportsItem,
+    writeOffsItem,
+    transfersItem,
+    managerItem,
+    messagesItem,
+    securityItem,
+  ],
 };
 
 function homePathForRole(role: string) {
   if (role === "super_admin") return "/admin" as const;
   if (role === "accountant") return "/reports" as const;
-  if (role === "manager") return "/manager" as const;
+  if (role === "manager" || role === "bar_manager") return "/manager" as const;
   return "/inventories" as const;
 }
 
@@ -88,6 +105,7 @@ function roleLabel(role: string) {
   if (role === "super_admin") return "Администратор системы";
   if (role === "accountant") return "Бухгалтер";
   if (role === "manager") return "Управляющий";
+  if (role === "bar_manager") return "Бар-менеджер";
   if (role === "kitchen_manager") return "Заведующий производством";
   return "Бармен";
 }
@@ -104,12 +122,22 @@ export function AppShell({
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { session, ready } = useSession();
   const currentSession = useServerFn(currentSessionFn);
+  const listAnnouncements = useServerFn(listAnnouncementsFn);
   const sessionToken = session?.session_token ?? null;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const { data: freshSession } = useQuery({
     queryKey: ["current-session", sessionToken],
     queryFn: () => currentSession({ data: { session_token: sessionToken! } }),
+    enabled: !!sessionToken,
+    staleTime: 30_000,
+  });
+  const { data: announcementsData } = useQuery({
+    queryKey: ["announcements-shell", sessionToken],
+    queryFn: () =>
+      listAnnouncements({
+        data: { session_token: sessionToken!, limit: 20, include_inactive: false },
+      }),
     enabled: !!sessionToken,
     staleTime: 30_000,
   });
@@ -166,6 +194,7 @@ export function AppShell({
       role={roleLabel(role)}
       restaurantName={session.restaurant?.name ?? null}
       networkName={session.network?.name ?? null}
+      unreadCount={announcementsData?.unread_count ?? 0}
       onNavigate={() => setMobileMenuOpen(false)}
       onLogout={logout}
     />
@@ -207,7 +236,12 @@ export function AppShell({
       </header>
 
       <div className="md:pl-60">
-        <main className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-6">{children}</main>
+        <main className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-6">
+          {pathname !== "/messages" && announcementsData && (
+            <UnreadAnnouncements announcements={announcementsData.announcements} />
+          )}
+          {children}
+        </main>
       </div>
     </div>
   );
@@ -221,6 +255,7 @@ function SidebarContent({
   role,
   restaurantName,
   networkName,
+  unreadCount,
   onNavigate,
   onLogout,
 }: {
@@ -231,6 +266,7 @@ function SidebarContent({
   role: string;
   restaurantName: string | null;
   networkName: string | null;
+  unreadCount: number;
   onNavigate: () => void;
   onLogout: () => void;
 }) {
@@ -273,6 +309,11 @@ function SidebarContent({
             >
               <Icon className="size-5 shrink-0" />
               <span>{item.label}</span>
+              {item.to === "/messages" && unreadCount > 0 && (
+                <span className="ml-auto min-w-5 rounded-full bg-primary px-1.5 py-0.5 text-center text-[11px] font-semibold text-primary-foreground">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
             </Link>
           );
         })}
@@ -289,5 +330,47 @@ function SidebarContent({
         </Button>
       </div>
     </div>
+  );
+}
+
+function UnreadAnnouncements({
+  announcements,
+}: {
+  announcements: Array<{
+    id: string;
+    title: string;
+    priority: string;
+    is_read: boolean;
+    is_active: boolean;
+  }>;
+}) {
+  const unread = announcements
+    .filter((announcement) => announcement.is_active && !announcement.is_read)
+    .slice(0, 3);
+  if (unread.length === 0) return null;
+  return (
+    <section className="mb-6 rounded-lg border border-primary/30 bg-primary/5 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-semibold">Новые сообщения</h2>
+        <Link to="/messages" className="text-sm text-primary hover:underline">
+          Посмотреть все
+        </Link>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {unread.map((announcement) => (
+          <Link
+            key={announcement.id}
+            to="/messages"
+            className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm hover:border-primary/50"
+          >
+            <MessageSquareText className="size-4 shrink-0 text-primary" />
+            <span className="truncate">{announcement.title}</span>
+            {announcement.priority === "urgent" && (
+              <span className="ml-auto text-xs font-medium text-destructive">Срочное</span>
+            )}
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }

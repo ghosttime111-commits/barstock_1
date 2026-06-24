@@ -13,6 +13,7 @@ import { Route as WriteOffsRouteImport } from './routes/write-offs'
 import { Route as TransfersRouteImport } from './routes/transfers'
 import { Route as SecurityRouteImport } from './routes/security'
 import { Route as ReportsRouteImport } from './routes/reports'
+import { Route as MessagesRouteImport } from './routes/messages'
 import { Route as ManagerRouteImport } from './routes/manager'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as InventoriesRouteImport } from './routes/inventories'
@@ -42,6 +43,11 @@ const SecurityRoute = SecurityRouteImport.update({
 const ReportsRoute = ReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MessagesRoute = MessagesRouteImport.update({
+  id: '/messages',
+  path: '/messages',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ManagerRoute = ManagerRouteImport.update({
@@ -101,6 +107,7 @@ export interface FileRoutesByFullPath {
   '/inventories': typeof InventoriesRouteWithChildren
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
+  '/messages': typeof MessagesRoute
   '/reports': typeof ReportsRouteWithChildren
   '/security': typeof SecurityRoute
   '/transfers': typeof TransfersRoute
@@ -116,6 +123,7 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminRoute
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
+  '/messages': typeof MessagesRoute
   '/security': typeof SecurityRoute
   '/transfers': typeof TransfersRoute
   '/write-offs': typeof WriteOffsRoute
@@ -132,6 +140,7 @@ export interface FileRoutesById {
   '/inventories': typeof InventoriesRouteWithChildren
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
+  '/messages': typeof MessagesRoute
   '/reports': typeof ReportsRouteWithChildren
   '/security': typeof SecurityRoute
   '/transfers': typeof TransfersRoute
@@ -150,6 +159,7 @@ export interface FileRouteTypes {
     | '/inventories'
     | '/login'
     | '/manager'
+    | '/messages'
     | '/reports'
     | '/security'
     | '/transfers'
@@ -165,6 +175,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/login'
     | '/manager'
+    | '/messages'
     | '/security'
     | '/transfers'
     | '/write-offs'
@@ -180,6 +191,7 @@ export interface FileRouteTypes {
     | '/inventories'
     | '/login'
     | '/manager'
+    | '/messages'
     | '/reports'
     | '/security'
     | '/transfers'
@@ -197,6 +209,7 @@ export interface RootRouteChildren {
   InventoriesRoute: typeof InventoriesRouteWithChildren
   LoginRoute: typeof LoginRoute
   ManagerRoute: typeof ManagerRoute
+  MessagesRoute: typeof MessagesRoute
   ReportsRoute: typeof ReportsRouteWithChildren
   SecurityRoute: typeof SecurityRoute
   TransfersRoute: typeof TransfersRoute
@@ -231,6 +244,13 @@ declare module '@tanstack/react-router' {
       path: '/reports'
       fullPath: '/reports'
       preLoaderRoute: typeof ReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/messages': {
+      id: '/messages'
+      path: '/messages'
+      fullPath: '/messages'
+      preLoaderRoute: typeof MessagesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/manager': {
@@ -341,6 +361,7 @@ const rootRouteChildren: RootRouteChildren = {
   InventoriesRoute: InventoriesRouteWithChildren,
   LoginRoute: LoginRoute,
   ManagerRoute: ManagerRoute,
+  MessagesRoute: MessagesRoute,
   ReportsRoute: ReportsRouteWithChildren,
   SecurityRoute: SecurityRoute,
   TransfersRoute: TransfersRoute,

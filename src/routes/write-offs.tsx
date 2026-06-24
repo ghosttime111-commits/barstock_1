@@ -23,7 +23,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/write-offs")({
   head: () => ({ meta: [{ title: "Списания — BarStock" }] }),
   component: () => (
-    <AppShell allow={["bartender", "kitchen_manager", "accountant", "super_admin"]}>
+    <AppShell allow={["bartender", "kitchen_manager", "accountant", "bar_manager", "super_admin"]}>
       <WriteOffsPage />
     </AppShell>
   ),
@@ -38,7 +38,9 @@ function WriteOffsPage() {
   const listWriteOffs = useServerFn(listWriteOffsFn);
   const listNetworks = useServerFn(listRestaurantNetworksFn);
   const sessionToken = session?.session_token ?? null;
-  const isAccountant = session?.user.role === "accountant" || session?.user.role === "super_admin";
+  const isBarManager = session?.user.role === "bar_manager";
+  const isAccountant =
+    session?.user.role === "accountant" || isBarManager || session?.user.role === "super_admin";
   const [month, setMonth] = useState(currentMonth());
   const [restaurantId, setRestaurantId] = useState("all");
   const [area, setArea] = useState("all");
@@ -60,7 +62,11 @@ function WriteOffsPage() {
           month: isAccountant ? month : null,
           network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
           restaurant_id: isAccountant && restaurantId !== "all" ? restaurantId : null,
-          area: isAccountant && area !== "all" ? (area as "bar" | "kitchen") : null,
+          area: isBarManager
+            ? "bar"
+            : isAccountant && area !== "all"
+              ? (area as "bar" | "kitchen")
+              : null,
         },
       }),
     enabled: !!sessionToken,
@@ -110,8 +116,9 @@ function WriteOffsPage() {
             setMonth={setMonth}
             restaurantId={restaurantId}
             setRestaurantId={setRestaurantId}
-            area={area}
+            area={isBarManager ? "bar" : area}
             setArea={setArea}
+            areaDisabled={isBarManager}
             restaurants={data?.restaurants ?? []}
             onExport={() => exportWriteOffsToExcel(data?.write_offs ?? [], month)}
             canExport={Boolean(data?.write_offs.length)}
@@ -247,6 +254,7 @@ function AccountantFilters(props: {
   setRestaurantId: (value: string) => void;
   area: string;
   setArea: (value: string) => void;
+  areaDisabled?: boolean;
   restaurants: Array<{ id: string; name: string }>;
   onExport: () => void;
   canExport: boolean;
@@ -273,6 +281,7 @@ function AccountantFilters(props: {
       <FilterLabel title="Зона">
         <select
           value={props.area}
+          disabled={props.areaDisabled}
           onChange={(e) => props.setArea(e.target.value)}
           className="h-10 rounded-md border border-input bg-background px-3 text-sm"
         >

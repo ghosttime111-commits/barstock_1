@@ -21,7 +21,13 @@ export const Route = createFileRoute("/security")({
 
 type PeriodFilter = "today" | "7days" | "month";
 type StatusFilter = "all" | "success" | "failure";
-type StaffRole = "bartender" | "kitchen_manager" | "accountant" | "manager" | "super_admin";
+type StaffRole =
+  | "bartender"
+  | "kitchen_manager"
+  | "accountant"
+  | "manager"
+  | "bar_manager"
+  | "super_admin";
 type LoginEvent = {
   id: string;
   login: string;
@@ -38,6 +44,7 @@ const roles: Array<{ value: StaffRole; label: string }> = [
   { value: "kitchen_manager", label: "Заведующий производством" },
   { value: "accountant", label: "Бухгалтер" },
   { value: "manager", label: "Управляющий" },
+  { value: "bar_manager", label: "Бар-менеджер" },
   { value: "super_admin", label: "Администратор системы" },
 ];
 

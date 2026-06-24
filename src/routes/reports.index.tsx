@@ -19,7 +19,7 @@ import { useState } from "react";
 export const Route = createFileRoute("/reports/")({
   head: () => ({ meta: [{ title: "Отчёты — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant", "super_admin"]}>
+    <AppShell allow={["accountant", "bar_manager", "super_admin"]}>
       <ReportsListPage />
     </AppShell>
   ),
@@ -38,6 +38,7 @@ function ReportsListPage() {
   const [archiveArea, setArchiveArea] = useState<string>("all");
   const sessionToken = session?.session_token ?? null;
   const isSuperAdmin = session?.user.role === "super_admin";
+  const isBarManager = session?.user.role === "bar_manager";
   const [networkId, setNetworkId] = useState<string>("all");
 
   const { data: networks = [] } = useQuery({
@@ -65,7 +66,7 @@ function ReportsListPage() {
         data: {
           restaurant_id: restaurantId === "all" ? null : restaurantId,
           network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
-          area: area === "all" ? null : area,
+          area: isBarManager ? "bar" : area === "all" ? null : area,
           session_token: sessionToken!,
         },
       }),
@@ -129,57 +130,63 @@ function ReportsListPage() {
             ))}
           </select>
         </label>
-        <AreaFilter value={area} onChange={setArea} />
+        <AreaFilter
+          value={isBarManager ? "bar" : area}
+          onChange={setArea}
+          disabled={isBarManager}
+        />
       </div>
 
-      <section className="rounded-xl border border-border bg-card p-4">
-        <h2 className="text-lg font-semibold">Экспорт архива</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Скачайте все закрытые переучёты за выбранный месяц.
-        </p>
-        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-          <label className="grid gap-1 text-sm">
-            <span className="text-xs text-muted-foreground">Месяц</span>
-            <Input
-              type="month"
-              value={archiveMonth}
-              onChange={(event) => setArchiveMonth(event.target.value)}
-              className="w-full sm:w-44"
-            />
-          </label>
-          <label className="grid gap-1 text-sm">
-            <span className="text-xs text-muted-foreground">Ресторан</span>
-            <select
-              value={archiveRestaurantId}
-              onChange={(event) => setArchiveRestaurantId(event.target.value)}
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="all">Все рестораны</option>
-              {restaurants.map((restaurant) => (
-                <option key={restaurant.id} value={restaurant.id}>
-                  {restaurant.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <AreaFilter value={archiveArea} onChange={setArchiveArea} />
-          <Button
-            type="button"
-            disabled={!archiveMonth || archiveMutation.isPending}
-            onClick={() => archiveMutation.mutate()}
-          >
-            <Download className="size-4" />
-            {archiveMutation.isPending ? "Подготовка..." : "Скачать архив Excel"}
-          </Button>
-        </div>
-        {archiveMutation.error && (
-          <p className="mt-3 text-sm text-destructive">
-            {archiveMutation.error instanceof Error
-              ? archiveMutation.error.message
-              : "Не удалось скачать архив"}
+      {!isBarManager && (
+        <section className="rounded-xl border border-border bg-card p-4">
+          <h2 className="text-lg font-semibold">Экспорт архива</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Скачайте все закрытые переучёты за выбранный месяц.
           </p>
-        )}
-      </section>
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+            <label className="grid gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">Месяц</span>
+              <Input
+                type="month"
+                value={archiveMonth}
+                onChange={(event) => setArchiveMonth(event.target.value)}
+                className="w-full sm:w-44"
+              />
+            </label>
+            <label className="grid gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">Ресторан</span>
+              <select
+                value={archiveRestaurantId}
+                onChange={(event) => setArchiveRestaurantId(event.target.value)}
+                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="all">Все рестораны</option>
+                {restaurants.map((restaurant) => (
+                  <option key={restaurant.id} value={restaurant.id}>
+                    {restaurant.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <AreaFilter value={archiveArea} onChange={setArchiveArea} />
+            <Button
+              type="button"
+              disabled={!archiveMonth || archiveMutation.isPending}
+              onClick={() => archiveMutation.mutate()}
+            >
+              <Download className="size-4" />
+              {archiveMutation.isPending ? "Подготовка..." : "Скачать архив Excel"}
+            </Button>
+          </div>
+          {archiveMutation.error && (
+            <p className="mt-3 text-sm text-destructive">
+              {archiveMutation.error instanceof Error
+                ? archiveMutation.error.message
+                : "Не удалось скачать архив"}
+            </p>
+          )}
+        </section>
+      )}
 
       {isLoading && <p className="text-sm text-muted-foreground">Загрузка…</p>}
       {error && (
@@ -233,12 +240,21 @@ function inventoryStatusLabel(status: string) {
   return status;
 }
 
-function AreaFilter({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function AreaFilter({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
   return (
     <label className="grid gap-1 text-sm">
       <span className="text-xs text-muted-foreground">{"\u0417\u043e\u043d\u0430"}</span>
       <select
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         className="h-10 rounded-md border border-input bg-background px-3 text-sm"
       >

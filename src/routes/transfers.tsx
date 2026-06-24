@@ -22,7 +22,16 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/transfers")({
   head: () => ({ meta: [{ title: "Перемещения — BarStock" }] }),
   component: () => (
-    <AppShell allow={["bartender", "kitchen_manager", "accountant", "manager", "super_admin"]}>
+    <AppShell
+      allow={[
+        "bartender",
+        "kitchen_manager",
+        "accountant",
+        "manager",
+        "bar_manager",
+        "super_admin",
+      ]}
+    >
       <TransfersPage />
     </AppShell>
   ),
@@ -63,6 +72,7 @@ function TransfersPage() {
   const sessionToken = session?.session_token ?? null;
   const role = session?.user.role;
   const isOperational = role === "bartender" || role === "kitchen_manager";
+  const isBarManager = role === "bar_manager";
   const isSuperAdmin = role === "super_admin";
   const [month, setMonth] = useState(currentMonth());
   const [networkId, setNetworkId] = useState("all");
@@ -80,7 +90,11 @@ function TransfersPage() {
           month: isOperational ? null : month,
           network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
           restaurant_id: !isOperational && restaurantId !== "all" ? restaurantId : null,
-          area: !isOperational && area !== "all" ? (area as TransferArea) : null,
+          area: isBarManager
+            ? "bar"
+            : !isOperational && area !== "all"
+              ? (area as TransferArea)
+              : null,
           status: !isOperational && status !== "all" ? (status as TransferStatus) : null,
         },
       }),
@@ -120,8 +134,9 @@ function TransfersPage() {
             }}
             restaurantId={restaurantId}
             setRestaurantId={setRestaurantId}
-            area={area}
+            area={isBarManager ? "bar" : area}
             setArea={setArea}
+            areaDisabled={isBarManager}
             status={status}
             setStatus={setStatus}
             isSuperAdmin={isSuperAdmin}
@@ -354,6 +369,7 @@ function TransferFilters({
   setRestaurantId,
   area,
   setArea,
+  areaDisabled = false,
   status,
   setStatus,
   isSuperAdmin,
@@ -369,6 +385,7 @@ function TransferFilters({
   setRestaurantId: (value: string) => void;
   area: string;
   setArea: (value: string) => void;
+  areaDisabled?: boolean;
   status: string;
   setStatus: (value: string) => void;
   isSuperAdmin: boolean;
@@ -415,6 +432,7 @@ function TransferFilters({
       <Field label="Зона">
         <select
           value={area}
+          disabled={areaDisabled}
           onChange={(event) => setArea(event.target.value)}
           className="h-10 rounded-md border border-input bg-background px-3 text-sm"
         >

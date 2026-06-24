@@ -36,7 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 export const Route = createFileRoute("/reports/$id")({
   head: () => ({ meta: [{ title: "Отчёт по переучёту — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant", "manager", "super_admin"]}>
+    <AppShell allow={["accountant", "manager", "bar_manager", "super_admin"]}>
       <ReportPage />
     </AppShell>
   ),

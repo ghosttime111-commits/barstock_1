@@ -42,7 +42,13 @@ export const Route = createFileRoute("/admin")({
 
 type RestaurantNetwork = { id: string; name: string; is_active: boolean };
 type Restaurant = { id: string; name: string; network_id: string };
-type StaffRole = "bartender" | "kitchen_manager" | "accountant" | "manager" | "super_admin";
+type StaffRole =
+  | "bartender"
+  | "kitchen_manager"
+  | "accountant"
+  | "manager"
+  | "bar_manager"
+  | "super_admin";
 type ProductArea = "bar" | "kitchen";
 type Bartender = {
   id: string;
@@ -100,6 +106,7 @@ const superAdminStaffRoles: StaffRole[] = [
   "bartender",
   "kitchen_manager",
   "manager",
+  "bar_manager",
   "accountant",
   "super_admin",
 ];
@@ -108,6 +115,7 @@ function staffRoleLabel(role: string) {
   if (role === "super_admin") return "Администратор системы";
   if (role === "accountant") return "Бухгалтер";
   if (role === "manager") return "Управляющий";
+  if (role === "bar_manager") return "Бар-менеджер";
   if (role === "kitchen_manager") return "Заведующий производством";
   return "Бармен";
 }
@@ -417,7 +425,7 @@ function AdminPage() {
           restaurant_id:
             bartenderRole === "accountant" || bartenderRole === "super_admin"
               ? null
-              : bartenderRole === "manager"
+              : bartenderRole === "manager" || bartenderRole === "bar_manager"
                 ? bartenderRestaurantId || null
                 : bartenderRestaurantId,
           session_token: sessionToken!,
@@ -749,7 +757,8 @@ function AdminPage() {
       bartenderLogin.trim() &&
       bartenderPassword &&
       (!isSuperAdmin || bartenderRole === "super_admin" || creationNetworkId) &&
-      (["accountant", "manager", "super_admin"].includes(bartenderRole) || bartenderRestaurantId)
+      (["accountant", "manager", "bar_manager", "super_admin"].includes(bartenderRole) ||
+        bartenderRestaurantId)
     ) {
       createBartenderMutation.mutate();
     }
@@ -950,7 +959,7 @@ function AdminPage() {
             value={bartenderRestaurantId}
             restaurants={creationRestaurants}
             onChange={setBartenderRestaurantId}
-            allowAll={bartenderRole === "manager"}
+            allowAll={bartenderRole === "manager" || bartenderRole === "bar_manager"}
             disabled={bartenderRole === "accountant" || bartenderRole === "super_admin"}
           />
           <Button
@@ -1012,9 +1021,12 @@ function AdminPage() {
             <tbody>
               {bartenders.map((bartender) => {
                 const draft = staffDraft(bartender);
-                const canAssignRestaurant = ["bartender", "kitchen_manager", "manager"].includes(
-                  draft.role,
-                );
+                const canAssignRestaurant = [
+                  "bartender",
+                  "kitchen_manager",
+                  "manager",
+                  "bar_manager",
+                ].includes(draft.role);
                 const canEditRole = isSuperAdmin && bartender.id !== session?.user.id;
                 const canEditActivity = isSuperAdmin
                   ? bartender.id !== session?.user.id
@@ -1064,7 +1076,9 @@ function AdminPage() {
                     <td className="px-3 py-2">
                       {bartender.restaurant_id
                         ? (restaurantById.get(bartender.restaurant_id) ?? "Не найден")
-                        : ["manager", "accountant", "super_admin"].includes(bartender.role)
+                        : ["manager", "bar_manager", "accountant", "super_admin"].includes(
+                              bartender.role,
+                            )
                           ? "Все рестораны"
                           : "Не назначен"}
                     </td>
@@ -1088,7 +1102,7 @@ function AdminPage() {
                           restaurants={restaurants.filter(
                             (restaurant) => restaurant.network_id === draft.network_id,
                           )}
-                          allowAll={draft.role === "manager"}
+                          allowAll={draft.role === "manager" || draft.role === "bar_manager"}
                           onChange={(restaurant_id) =>
                             setStaffDraft(bartender.id, { restaurant_id })
                           }

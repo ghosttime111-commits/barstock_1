@@ -4,6 +4,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
   AlertTriangle,
+  ArrowRightLeft,
   BarChart3,
   Building2,
   ClipboardCheck,
@@ -25,7 +26,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/manager")({
   head: () => ({ meta: [{ title: "Статистика — BarStock" }] }),
   component: () => (
-    <AppShell allow={["manager", "accountant", "super_admin"]}>
+    <AppShell allow={["manager", "bar_manager", "accountant", "super_admin"]}>
       <ManagerPage />
     </AppShell>
   ),
@@ -54,6 +55,7 @@ function ManagerPage() {
   const [area, setArea] = useState("all");
   const [networkId, setNetworkId] = useState("all");
   const isSuperAdmin = session?.user.role === "super_admin";
+  const isBarManager = session?.user.role === "bar_manager";
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["manager-stats", month, networkId, restaurantId, area, session?.user.restaurant_id],
@@ -63,7 +65,7 @@ function ManagerPage() {
           month,
           restaurant_id: restaurantId === "all" ? null : restaurantId,
           network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
-          area: area === "all" ? null : (area as "bar" | "kitchen"),
+          area: isBarManager ? "bar" : area === "all" ? null : (area as "bar" | "kitchen"),
           session_token: sessionToken!,
         },
       }),
@@ -154,7 +156,8 @@ function ManagerPage() {
         <label className="grid gap-1 text-sm">
           <span className="text-xs text-muted-foreground">Зона</span>
           <select
-            value={area}
+            value={isBarManager ? "bar" : area}
+            disabled={isBarManager}
             onChange={(event) => setArea(event.target.value)}
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
           >
@@ -174,7 +177,7 @@ function ManagerPage() {
 
       {data && (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <MetricCard
               icon={<ClipboardCheck className="size-4" />}
               label="Всего переучётов"
@@ -209,6 +212,17 @@ function ManagerPage() {
               icon={<ReceiptText className="size-4" />}
               label="Списания"
               value={`${formatMoney(data.writeOffsTotal)} BYN`}
+              tone="warning"
+            />
+            <MetricCard
+              icon={<ArrowRightLeft className="size-4" />}
+              label="Перемещения"
+              value={String(data.summary.transfers)}
+            />
+            <MetricCard
+              icon={<Building2 className="size-4" />}
+              label="Не завершили переучёт"
+              value={String(data.summary.open_restaurants)}
               tone="warning"
             />
           </div>
@@ -303,6 +317,21 @@ function ManagerPage() {
               ])}
             />
           </StatsSection>
+
+          {isBarManager && (
+            <StatsSection title="Сотрудники бара">
+              <DataTable
+                headers={["Имя", "Логин", "Роль", "Ресторан"]}
+                empty="В выбранной области нет активных сотрудников бара."
+                rows={data.bar_staff.map((staff) => [
+                  staff.name,
+                  staff.login,
+                  staff.role === "bar_manager" ? "Бар-менеджер" : "Бармен",
+                  staff.restaurant_name,
+                ])}
+              />
+            </StatsSection>
+          )}
 
           <StatsSection title="Последние переучёты">
             <div className="overflow-x-auto border-y border-border">

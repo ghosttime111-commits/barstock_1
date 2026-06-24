@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react";
 
+export type BarstockRole =
+  | "bartender"
+  | "kitchen_manager"
+  | "accountant"
+  | "manager"
+  | "bar_manager"
+  | "super_admin";
+
 export type BarstockSession = {
   user: {
     id: string;
     name: string;
     login: string;
-    role: string;
+    role: BarstockRole;
     restaurant_id: string | null;
     network_id: string | null;
   };

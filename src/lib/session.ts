@@ -6,6 +6,7 @@ export type BarstockRole =
   | "accountant"
   | "manager"
   | "bar_manager"
+  | "kitchen_area_manager"
   | "super_admin";
 
 export type BarstockSession = {

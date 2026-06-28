@@ -27,6 +27,7 @@ type StaffRole =
   | "accountant"
   | "manager"
   | "bar_manager"
+  | "kitchen_area_manager"
   | "super_admin";
 type LoginEvent = {
   id: string;
@@ -45,6 +46,7 @@ const roles: Array<{ value: StaffRole; label: string }> = [
   { value: "accountant", label: "Бухгалтер" },
   { value: "manager", label: "Управляющий" },
   { value: "bar_manager", label: "Бар-менеджер" },
+  { value: "kitchen_area_manager", label: "Менеджер по кухне" },
   { value: "super_admin", label: "Администратор системы" },
 ];
 

@@ -18,7 +18,9 @@ export const Route = createFileRoute("/login")({
 function homeForRole(role: string) {
   if (role === "super_admin") return "/admin" as const;
   if (role === "accountant") return "/reports" as const;
-  if (role === "manager" || role === "bar_manager") return "/manager" as const;
+  if (role === "manager" || role === "bar_manager" || role === "kitchen_area_manager") {
+    return "/manager" as const;
+  }
   return "/inventories" as const;
 }
 

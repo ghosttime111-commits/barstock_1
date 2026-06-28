@@ -23,7 +23,16 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/write-offs")({
   head: () => ({ meta: [{ title: "Списания — BarStock" }] }),
   component: () => (
-    <AppShell allow={["bartender", "kitchen_manager", "accountant", "bar_manager", "super_admin"]}>
+    <AppShell
+      allow={[
+        "bartender",
+        "kitchen_manager",
+        "accountant",
+        "bar_manager",
+        "kitchen_area_manager",
+        "super_admin",
+      ]}
+    >
       <WriteOffsPage />
     </AppShell>
   ),
@@ -39,8 +48,12 @@ function WriteOffsPage() {
   const listNetworks = useServerFn(listRestaurantNetworksFn);
   const sessionToken = session?.session_token ?? null;
   const isBarManager = session?.user.role === "bar_manager";
+  const isKitchenAreaManager = session?.user.role === "kitchen_area_manager";
+  const managedArea = isBarManager ? "bar" : isKitchenAreaManager ? "kitchen" : null;
   const isAccountant =
-    session?.user.role === "accountant" || isBarManager || session?.user.role === "super_admin";
+    session?.user.role === "accountant" ||
+    managedArea != null ||
+    session?.user.role === "super_admin";
   const [month, setMonth] = useState(currentMonth());
   const [restaurantId, setRestaurantId] = useState("all");
   const [area, setArea] = useState("all");
@@ -62,8 +75,8 @@ function WriteOffsPage() {
           month: isAccountant ? month : null,
           network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
           restaurant_id: isAccountant && restaurantId !== "all" ? restaurantId : null,
-          area: isBarManager
-            ? "bar"
+          area: managedArea
+            ? managedArea
             : isAccountant && area !== "all"
               ? (area as "bar" | "kitchen")
               : null,
@@ -116,9 +129,9 @@ function WriteOffsPage() {
             setMonth={setMonth}
             restaurantId={restaurantId}
             setRestaurantId={setRestaurantId}
-            area={isBarManager ? "bar" : area}
+            area={managedArea ?? area}
             setArea={setArea}
-            areaDisabled={isBarManager}
+            areaDisabled={managedArea != null}
             restaurants={data?.restaurants ?? []}
             onExport={() => exportWriteOffsToExcel(data?.write_offs ?? [], month)}
             canExport={Boolean(data?.write_offs.length)}

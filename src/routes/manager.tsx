@@ -26,7 +26,9 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/manager")({
   head: () => ({ meta: [{ title: "Статистика — BarStock" }] }),
   component: () => (
-    <AppShell allow={["manager", "bar_manager", "accountant", "super_admin"]}>
+    <AppShell
+      allow={["manager", "bar_manager", "kitchen_area_manager", "accountant", "super_admin"]}
+    >
       <ManagerPage />
     </AppShell>
   ),
@@ -56,6 +58,8 @@ function ManagerPage() {
   const [networkId, setNetworkId] = useState("all");
   const isSuperAdmin = session?.user.role === "super_admin";
   const isBarManager = session?.user.role === "bar_manager";
+  const isKitchenAreaManager = session?.user.role === "kitchen_area_manager";
+  const managedArea = isBarManager ? "bar" : isKitchenAreaManager ? "kitchen" : null;
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["manager-stats", month, networkId, restaurantId, area, session?.user.restaurant_id],
@@ -65,7 +69,7 @@ function ManagerPage() {
           month,
           restaurant_id: restaurantId === "all" ? null : restaurantId,
           network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
-          area: isBarManager ? "bar" : area === "all" ? null : (area as "bar" | "kitchen"),
+          area: managedArea ?? (area === "all" ? null : (area as "bar" | "kitchen")),
           session_token: sessionToken!,
         },
       }),
@@ -156,8 +160,8 @@ function ManagerPage() {
         <label className="grid gap-1 text-sm">
           <span className="text-xs text-muted-foreground">Зона</span>
           <select
-            value={isBarManager ? "bar" : area}
-            disabled={isBarManager}
+            value={managedArea ?? area}
+            disabled={managedArea != null}
             onChange={(event) => setArea(event.target.value)}
             className="h-10 rounded-md border border-input bg-background px-3 text-sm"
           >
@@ -223,6 +227,12 @@ function ManagerPage() {
               icon={<Building2 className="size-4" />}
               label="Не завершили переучёт"
               value={String(data.summary.open_restaurants)}
+              tone="warning"
+            />
+            <MetricCard
+              icon={<ClipboardCheck className="size-4" />}
+              label="Незавершённых переучётов"
+              value={String(data.summary.open_inventories)}
               tone="warning"
             />
           </div>
@@ -318,15 +328,19 @@ function ManagerPage() {
             />
           </StatsSection>
 
-          {isBarManager && (
-            <StatsSection title="Сотрудники бара">
+          {managedArea && (
+            <StatsSection
+              title={managedArea === "kitchen" ? "Сотрудники кухни" : "Сотрудники бара"}
+            >
               <DataTable
                 headers={["Имя", "Логин", "Роль", "Ресторан"]}
-                empty="В выбранной области нет активных сотрудников бара."
-                rows={data.bar_staff.map((staff) => [
+                empty={`В выбранной области нет активных сотрудников ${
+                  managedArea === "kitchen" ? "кухни" : "бара"
+                }.`}
+                rows={data.area_staff.map((staff) => [
                   staff.name,
                   staff.login,
-                  staff.role === "bar_manager" ? "Бар-менеджер" : "Бармен",
+                  staffRoleLabel(staff.role),
                   staff.restaurant_name,
                 ])}
               />
@@ -563,4 +577,11 @@ function DataTable({
 
 function areaLabel(area: string) {
   return area === "kitchen" ? "Кухня" : "Бар";
+}
+
+function staffRoleLabel(role: string) {
+  if (role === "kitchen_area_manager") return "Менеджер по кухне";
+  if (role === "kitchen_manager") return "Заведующий производством";
+  if (role === "bar_manager") return "Бар-менеджер";
+  return "Бармен";
 }

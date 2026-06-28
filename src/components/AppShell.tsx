@@ -12,6 +12,7 @@ import {
   ReceiptText,
   Settings,
   ShieldCheck,
+  Users,
   Wine,
   type LucideIcon,
 } from "lucide-react";
@@ -35,6 +36,7 @@ export type AllowedRole =
   | "kitchen_manager"
   | "manager"
   | "bar_manager"
+  | "kitchen_area_manager"
   | "super_admin";
 
 type NavigationPath =
@@ -43,6 +45,7 @@ type NavigationPath =
   | "/write-offs"
   | "/transfers"
   | "/messages"
+  | "/staff"
   | "/admin"
   | "/manager"
   | "/security";
@@ -69,6 +72,7 @@ const messagesItem: NavigationItem = {
   to: "/messages",
   icon: MessageSquareText,
 };
+const staffItem: NavigationItem = { label: "Сотрудники", to: "/staff", icon: Users };
 const adminItem: NavigationItem = { label: "Управление", to: "/admin", icon: Settings };
 const managerItem: NavigationItem = { label: "Статистика", to: "/manager", icon: BarChart3 };
 const securityItem: NavigationItem = {
@@ -82,7 +86,15 @@ const navigationByRole: Record<AllowedRole, NavigationItem[]> = {
   kitchen_manager: [inventoriesItem, writeOffsItem, transfersItem, messagesItem],
   accountant: [reportsItem, writeOffsItem, transfersItem, adminItem, managerItem, messagesItem],
   manager: [managerItem, transfersItem, messagesItem],
-  bar_manager: [reportsItem, writeOffsItem, transfersItem, managerItem, messagesItem],
+  bar_manager: [managerItem, reportsItem, writeOffsItem, transfersItem, staffItem, messagesItem],
+  kitchen_area_manager: [
+    managerItem,
+    reportsItem,
+    writeOffsItem,
+    transfersItem,
+    staffItem,
+    messagesItem,
+  ],
   super_admin: [
     adminItem,
     reportsItem,
@@ -97,7 +109,9 @@ const navigationByRole: Record<AllowedRole, NavigationItem[]> = {
 function homePathForRole(role: string) {
   if (role === "super_admin") return "/admin" as const;
   if (role === "accountant") return "/reports" as const;
-  if (role === "manager" || role === "bar_manager") return "/manager" as const;
+  if (role === "manager" || role === "bar_manager" || role === "kitchen_area_manager") {
+    return "/manager" as const;
+  }
   return "/inventories" as const;
 }
 
@@ -106,6 +120,7 @@ function roleLabel(role: string) {
   if (role === "accountant") return "Бухгалтер";
   if (role === "manager") return "Управляющий";
   if (role === "bar_manager") return "Бар-менеджер";
+  if (role === "kitchen_area_manager") return "Менеджер по кухне";
   if (role === "kitchen_manager") return "Заведующий производством";
   return "Бармен";
 }

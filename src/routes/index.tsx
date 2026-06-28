@@ -29,7 +29,9 @@ function Index() {
         ? "/admin"
         : session.user.role === "accountant"
           ? "/reports"
-          : session.user.role === "manager" || session.user.role === "bar_manager"
+          : session.user.role === "manager" ||
+              session.user.role === "bar_manager" ||
+              session.user.role === "kitchen_area_manager"
             ? "/manager"
             : "/inventories";
     navigate({ to: home, replace: true });

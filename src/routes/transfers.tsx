@@ -29,6 +29,7 @@ export const Route = createFileRoute("/transfers")({
         "accountant",
         "manager",
         "bar_manager",
+        "kitchen_area_manager",
         "super_admin",
       ]}
     >
@@ -73,6 +74,8 @@ function TransfersPage() {
   const role = session?.user.role;
   const isOperational = role === "bartender" || role === "kitchen_manager";
   const isBarManager = role === "bar_manager";
+  const isKitchenAreaManager = role === "kitchen_area_manager";
+  const managedArea = isBarManager ? "bar" : isKitchenAreaManager ? "kitchen" : null;
   const isSuperAdmin = role === "super_admin";
   const [month, setMonth] = useState(currentMonth());
   const [networkId, setNetworkId] = useState("all");
@@ -90,8 +93,8 @@ function TransfersPage() {
           month: isOperational ? null : month,
           network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
           restaurant_id: !isOperational && restaurantId !== "all" ? restaurantId : null,
-          area: isBarManager
-            ? "bar"
+          area: managedArea
+            ? managedArea
             : !isOperational && area !== "all"
               ? (area as TransferArea)
               : null,
@@ -134,9 +137,9 @@ function TransfersPage() {
             }}
             restaurantId={restaurantId}
             setRestaurantId={setRestaurantId}
-            area={isBarManager ? "bar" : area}
+            area={managedArea ?? area}
             setArea={setArea}
-            areaDisabled={isBarManager}
+            areaDisabled={managedArea != null}
             status={status}
             setStatus={setStatus}
             isSuperAdmin={isSuperAdmin}

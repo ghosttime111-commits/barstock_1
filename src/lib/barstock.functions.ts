@@ -10,13 +10,19 @@ const productUnitSchema = z.enum(["л", "кг", "шт", "бут"]);
 const productStatusSchema = z.enum(["approved", "pending", "archived"]);
 const stockTransferStatusSchema = z.enum(["sent", "delivered", "cancelled"]);
 const announcementPrioritySchema = z.enum(["normal", "important", "urgent"]);
-const announcementAudienceSchema = z.enum(["all_staff", "restaurant", "bar_staff"]);
+const announcementAudienceSchema = z.enum([
+  "all_staff",
+  "restaurant",
+  "bar_staff",
+  "kitchen_staff",
+]);
 const staffRoleSchema = z.enum([
   "bartender",
   "kitchen_manager",
   "accountant",
   "manager",
   "bar_manager",
+  "kitchen_area_manager",
   "super_admin",
 ]);
 const inventoryAreaSchema = z.enum(["bar", "kitchen"]);
@@ -282,6 +288,12 @@ function roleArea(role: OperationalRole): InventoryArea {
   return role === "kitchen_manager" ? "kitchen" : "bar";
 }
 
+function areaManagerArea(role: StaffRole): InventoryArea | null {
+  if (role === "bar_manager") return "bar";
+  if (role === "kitchen_area_manager") return "kitchen";
+  return null;
+}
+
 function requireOperationalRole(ctx: AuthContext): InventoryArea {
   requireRole(ctx, ["bartender", "kitchen_manager"]);
   return roleArea(ctx.user.role as OperationalRole);
@@ -329,15 +341,22 @@ function canViewAnnouncement(ctx: AuthContext, announcement: AnnouncementAccessR
       ctx.user.restaurant_id && announcement.target_restaurant_id === ctx.user.restaurant_id,
     );
   }
-  if (announcement.audience_type === "bar_staff") {
-    const barRole = ["bartender", "bar_manager", "accountant", "manager", "super_admin"].includes(
-      ctx.user.role,
-    );
-    if (!barRole) return false;
+  if (
+    announcement.audience_type === "bar_staff" ||
+    announcement.audience_type === "kitchen_staff"
+  ) {
+    const audienceArea = announcement.audience_type === "kitchen_staff" ? "kitchen" : "bar";
+    const areaRoles =
+      audienceArea === "kitchen"
+        ? ["kitchen_manager", "kitchen_area_manager"]
+        : ["bartender", "bar_manager"];
+    const managementRoles = ["accountant", "manager", "super_admin"];
+    const areaManagerRole = audienceArea === "kitchen" ? "kitchen_area_manager" : "bar_manager";
+    if (![...areaRoles, ...managementRoles].includes(ctx.user.role)) return false;
     return (
       !announcement.target_restaurant_id ||
       announcement.target_restaurant_id === ctx.user.restaurant_id ||
-      ["bar_manager", "accountant", "manager"].includes(ctx.user.role)
+      [...managementRoles, areaManagerRole].includes(ctx.user.role)
     );
   }
   return false;
@@ -528,12 +547,19 @@ export const createAnnouncementFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["bar_manager", "super_admin"]);
+    requireRole(ctx, ["bar_manager", "kitchen_area_manager", "super_admin"]);
     const networkId = resolveNetworkId(ctx, data.network_id);
     const targetRestaurantId = data.target_restaurant_id ?? null;
+    const managerArea = areaManagerArea(ctx.user.role);
 
     if (data.audience_type === "restaurant" && !targetRestaurantId) {
       throw new Error("Выберите ресторан для этой аудитории");
+    }
+    if (managerArea === "bar" && data.audience_type === "kitchen_staff") {
+      throw new Error("Бар-менеджер не может публиковать сообщения для кухни");
+    }
+    if (managerArea === "kitchen" && data.audience_type === "bar_staff") {
+      throw new Error("Менеджер по кухне не может публиковать сообщения для бара");
     }
     if (data.expires_at && new Date(data.expires_at).getTime() <= Date.now()) {
       throw new Error("Срок действия должен быть в будущем");
@@ -563,7 +589,12 @@ export const createAnnouncementFn = createServerFn({ method: "POST" })
         priority: data.priority,
         audience_type: data.audience_type,
         target_restaurant_id: data.audience_type === "all_staff" ? null : targetRestaurantId,
-        target_area: data.audience_type === "bar_staff" ? "bar" : null,
+        target_area:
+          data.audience_type === "bar_staff"
+            ? "bar"
+            : data.audience_type === "kitchen_staff"
+              ? "kitchen"
+              : null,
         expires_at: data.expires_at ?? null,
         is_active: true,
       })
@@ -605,7 +636,10 @@ export const listAnnouncementsFn = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     const visible = (announcements ?? []).filter((announcement) => {
       if (canViewAnnouncement(ctx, announcement)) return true;
-      if (data.include_inactive && ["bar_manager", "super_admin"].includes(ctx.user.role)) {
+      if (
+        data.include_inactive &&
+        ["bar_manager", "kitchen_area_manager", "super_admin"].includes(ctx.user.role)
+      ) {
         return (
           (ctx.user.role === "super_admin" ||
             (announcement.network_id === requireNetworkId(ctx) &&
@@ -678,13 +712,22 @@ export const listAnnouncementsFn = createServerFn({ method: "POST" })
         if (announcement.audience_type === "restaurant") {
           return user.restaurant_id === announcement.target_restaurant_id;
         }
+        const audienceArea = announcement.audience_type === "kitchen_staff" ? "kitchen" : "bar";
+        const areaRoles =
+          audienceArea === "kitchen"
+            ? ["kitchen_manager", "kitchen_area_manager"]
+            : ["bartender", "bar_manager"];
+        const networkRoles = [
+          "accountant",
+          "manager",
+          "super_admin",
+          audienceArea === "kitchen" ? "kitchen_area_manager" : "bar_manager",
+        ];
         return (
-          ["bartender", "bar_manager", "accountant", "manager", "super_admin"].includes(
-            user.role,
-          ) &&
+          [...areaRoles, ...networkRoles].includes(user.role) &&
           (!announcement.target_restaurant_id ||
             user.restaurant_id === announcement.target_restaurant_id ||
-            ["bar_manager", "accountant", "manager", "super_admin"].includes(user.role))
+            networkRoles.includes(user.role))
         );
       }).length;
       return {
@@ -741,7 +784,7 @@ export const deactivateAnnouncementFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["bar_manager", "super_admin"]);
+    requireRole(ctx, ["bar_manager", "kitchen_area_manager", "super_admin"]);
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
     const { data: announcement, error: announcementError } = await sb
@@ -819,7 +862,7 @@ export const listRestaurantsFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.extend(networkFilterSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["accountant", "bar_manager", "super_admin"]);
+    requireRole(ctx, ["accountant", "bar_manager", "kitchen_area_manager", "super_admin"]);
 
     const { getBarstock } = await import("./barstock.server");
     let query = getBarstock().from("restaurants").select("id,name,network_id").order("name");
@@ -831,6 +874,51 @@ export const listRestaurantsFn = createServerFn({ method: "POST" })
     const { data: rows, error } = await query;
     if (error) throw new Error(error.message);
     return rows ?? [];
+  });
+
+export const listAreaStaffFn = createServerFn({ method: "POST" })
+  .inputValidator((input) =>
+    sessionSchema.extend({ restaurant_id: z.string().uuid().nullable().optional() }).parse(input),
+  )
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requireRole(ctx, ["bar_manager", "kitchen_area_manager"]);
+    const area = areaManagerArea(ctx.user.role);
+    if (!area) throw new Error("Недостаточно прав");
+
+    const roles: StaffRole[] =
+      area === "kitchen"
+        ? ["kitchen_manager", "kitchen_area_manager"]
+        : ["bartender", "bar_manager"];
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    let query = sb
+      .from("users")
+      .select("id,name,login,role,restaurant_id,is_active")
+      .eq("network_id", requireNetworkId(ctx))
+      .in("role", roles)
+      .order("name");
+    if (data.restaurant_id) query = query.eq("restaurant_id", data.restaurant_id);
+    const { data: staff, error } = await query;
+    if (error) throw new Error(error.message);
+
+    const restaurantIds = Array.from(
+      new Set(
+        (staff ?? []).map((user) => user.restaurant_id).filter((id): id is string => Boolean(id)),
+      ),
+    );
+    const { data: restaurants, error: restaurantsError } = restaurantIds.length
+      ? await sb.from("restaurants").select("id,name").in("id", restaurantIds)
+      : { data: [], error: null };
+    if (restaurantsError) throw new Error(restaurantsError.message);
+    const restaurantById = new Map((restaurants ?? []).map((row) => [row.id, row.name]));
+
+    return (staff ?? []).map((user) => ({
+      ...user,
+      restaurant_name: user.restaurant_id
+        ? (restaurantById.get(user.restaurant_id) ?? "Неизвестный ресторан")
+        : "Вся сеть",
+    }));
   });
 
 export const createRestaurantFn = createServerFn({ method: "POST" })
@@ -870,6 +958,7 @@ export const listBartendersFn = createServerFn({ method: "POST" })
         "accountant",
         "manager",
         "bar_manager",
+        "kitchen_area_manager",
         "super_admin",
       ])
       .order("name");
@@ -909,8 +998,11 @@ export const createBartenderFn = createServerFn({ method: "POST" })
     if (role === "super_admin" && ctx.user.role !== "super_admin") {
       throw new Error("Только администратор системы может назначить эту роль");
     }
-    if (ctx.user.role === "accountant" && role === "bar_manager") {
-      throw new Error("Только администратор системы может создать бар-менеджера");
+    if (
+      ctx.user.role === "accountant" &&
+      (role === "bar_manager" || role === "kitchen_area_manager")
+    ) {
+      throw new Error("Только администратор системы может создать менеджера зоны");
     }
     const networkId =
       role === "super_admin" && data.network_id == null
@@ -974,7 +1066,7 @@ export const deleteBartenderFn = createServerFn({ method: "POST" })
     }
     if (
       ctx.user.role === "accountant" &&
-      ["manager", "bar_manager", "accountant"].includes(bartender.role)
+      ["manager", "bar_manager", "kitchen_area_manager", "accountant"].includes(bartender.role)
     ) {
       throw new Error("Бухгалтер не может удалить этого пользователя");
     }
@@ -1113,7 +1205,13 @@ export const deleteRestaurantFn = createServerFn({ method: "POST" })
       sb
         .from("users")
         .select("id", { count: "exact", head: true })
-        .in("role", ["bartender", "kitchen_manager", "manager", "bar_manager"])
+        .in("role", [
+          "bartender",
+          "kitchen_manager",
+          "manager",
+          "bar_manager",
+          "kitchen_area_manager",
+        ])
         .eq("restaurant_id", data.id)
         .neq("is_active", false),
       sb
@@ -1864,7 +1962,7 @@ export const listClosedInventoriesFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["accountant", "bar_manager", "super_admin"]);
+    requireRole(ctx, ["accountant", "bar_manager", "kitchen_area_manager", "super_admin"]);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -1878,7 +1976,8 @@ export const listClosedInventoriesFn = createServerFn({ method: "POST" })
       if (data.network_id) query = query.eq("network_id", data.network_id);
     } else query = query.eq("network_id", requireNetworkId(ctx));
     if (data.restaurant_id) query = query.eq("restaurant_id", data.restaurant_id);
-    if (ctx.user.role === "bar_manager") query = query.eq("area", "bar");
+    const managerArea = areaManagerArea(ctx.user.role);
+    if (managerArea) query = query.eq("area", managerArea);
     else if (data.area) query = query.eq("area", data.area);
 
     const { data: invs, error } = await query;
@@ -1957,7 +2056,13 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
   .inputValidator((input) => sessionSchema.merge(idSchema).parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["accountant", "manager", "bar_manager", "super_admin"]);
+    requireRole(ctx, [
+      "accountant",
+      "manager",
+      "bar_manager",
+      "kitchen_area_manager",
+      "super_admin",
+    ]);
 
     const { getBarstock } = await import("./barstock.server");
     const { classifyDiscrepancy } = await import("./expectedStock");
@@ -1970,8 +2075,13 @@ export const getInventoryReportFn = createServerFn({ method: "POST" })
     if (e1) throw new Error(e1.message);
     if (!inv) throw new Error("Переучёт не найден");
     assertSameNetwork(ctx, inv.network_id);
-    if (ctx.user.role === "bar_manager" && (inv.area ?? "bar") !== "bar") {
-      throw new Error("Бар-менеджеру доступны только барные отчёты");
+    const managerArea = areaManagerArea(ctx.user.role);
+    if (managerArea && (inv.area ?? "bar") !== managerArea) {
+      throw new Error(
+        managerArea === "kitchen"
+          ? "Менеджеру по кухне доступны только кухонные отчёты"
+          : "Бар-менеджеру доступны только барные отчёты",
+      );
     }
     if (ctx.user.role === "manager") {
       if (inv.status !== "completed")
@@ -2245,13 +2355,21 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
   .inputValidator((input) => writeOffFiltersSchema.parse(input))
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["bartender", "kitchen_manager", "accountant", "bar_manager", "super_admin"]);
+    requireRole(ctx, [
+      "bartender",
+      "kitchen_manager",
+      "accountant",
+      "bar_manager",
+      "kitchen_area_manager",
+      "super_admin",
+    ]);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
     const isAccountant =
       ctx.user.role === "accountant" ||
       ctx.user.role === "bar_manager" ||
+      ctx.user.role === "kitchen_area_manager" ||
       ctx.user.role === "super_admin";
     let query = sb
       .from("write_offs")
@@ -2264,7 +2382,8 @@ export const listWriteOffsFn = createServerFn({ method: "POST" })
         if (data.network_id) query = query.eq("network_id", data.network_id);
       } else query = query.eq("network_id", requireNetworkId(ctx));
       if (data.restaurant_id) query = query.eq("restaurant_id", data.restaurant_id);
-      if (ctx.user.role === "bar_manager") query = query.eq("area", "bar");
+      const managerArea = areaManagerArea(ctx.user.role);
+      if (managerArea) query = query.eq("area", managerArea);
       else if (data.area) query = query.eq("area", data.area);
       if (data.month) {
         const [year, month] = data.month.split("-").map(Number);
@@ -2554,6 +2673,7 @@ export const listStockTransfersFn = createServerFn({ method: "POST" })
       "accountant",
       "manager",
       "bar_manager",
+      "kitchen_area_manager",
       "super_admin",
     ]);
 
@@ -2590,7 +2710,8 @@ export const listStockTransfersFn = createServerFn({ method: "POST" })
           `from_restaurant_id.eq.${restaurantId},to_restaurant_id.eq.${restaurantId}`,
         );
       }
-      if (ctx.user.role === "bar_manager") query = query.eq("area", "bar");
+      const managerArea = areaManagerArea(ctx.user.role);
+      if (managerArea) query = query.eq("area", managerArea);
       else if (data.area) query = query.eq("area", data.area);
     }
 
@@ -2724,7 +2845,13 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const ctx = await requireSession(data.session_token);
-    requireRole(ctx, ["manager", "bar_manager", "accountant", "super_admin"]);
+    requireRole(ctx, [
+      "manager",
+      "bar_manager",
+      "kitchen_area_manager",
+      "accountant",
+      "super_admin",
+    ]);
 
     const { getBarstock } = await import("./barstock.server");
     const sb = getBarstock();
@@ -2735,7 +2862,7 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
     const effectiveRestaurantId = fixedRestaurantId ?? data.restaurant_id ?? null;
     const effectiveNetworkId =
       ctx.user.role === "super_admin" ? (data.network_id ?? null) : requireNetworkId(ctx);
-    const effectiveArea = ctx.user.role === "bar_manager" ? "bar" : data.area;
+    const effectiveArea = areaManagerArea(ctx.user.role) ?? data.area;
 
     let inventoryQuery = sb
       .from("inventories")
@@ -2787,15 +2914,19 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
       openInventoryQuery = openInventoryQuery.eq("restaurant_id", effectiveRestaurantId);
     }
 
-    let barStaffQuery = sb
+    const areaStaffRoles: StaffRole[] =
+      effectiveArea === "kitchen"
+        ? ["kitchen_manager", "kitchen_area_manager"]
+        : ["bartender", "bar_manager"];
+    let areaStaffQuery = sb
       .from("users")
       .select("id,name,login,role,restaurant_id,is_active")
-      .in("role", ["bartender", "bar_manager"])
+      .in("role", areaStaffRoles)
       .neq("is_active", false)
       .order("name");
-    if (effectiveNetworkId) barStaffQuery = barStaffQuery.eq("network_id", effectiveNetworkId);
+    if (effectiveNetworkId) areaStaffQuery = areaStaffQuery.eq("network_id", effectiveNetworkId);
     if (effectiveRestaurantId) {
-      barStaffQuery = barStaffQuery.eq("restaurant_id", effectiveRestaurantId);
+      areaStaffQuery = areaStaffQuery.eq("restaurant_id", effectiveRestaurantId);
     }
 
     const [
@@ -2803,7 +2934,7 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
       { data: writeOffs, error: writeOffsError },
       { data: transfers, error: transfersError },
       { data: openInventories, error: openInventoriesError },
-      { data: barStaff, error: barStaffError },
+      { data: areaStaff, error: areaStaffError },
       restaurantsResult,
       networksResult,
     ] = await Promise.all([
@@ -2811,7 +2942,7 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
       writeOffQuery,
       transferQuery,
       openInventoryQuery,
-      barStaffQuery,
+      areaStaffQuery,
       fixedRestaurantId
         ? sb
             .from("restaurants")
@@ -2836,7 +2967,7 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
     if (writeOffsError) throw new Error(writeOffsError.message);
     if (transfersError) throw new Error(transfersError.message);
     if (openInventoriesError) throw new Error(openInventoriesError.message);
-    if (barStaffError) throw new Error(barStaffError.message);
+    if (areaStaffError) throw new Error(areaStaffError.message);
     if (restaurantsResult.error) throw new Error(restaurantsResult.error.message);
     if (networksResult.error) throw new Error(networksResult.error.message);
 
@@ -3098,6 +3229,7 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
         problem_positions: totals.problemPositions,
         write_offs_amount: writeOffsTotal,
         transfers: (transfers ?? []).length,
+        open_inventories: (openInventories ?? []).length,
         open_restaurants: new Set(
           (openInventories ?? []).map((inventory) => inventory.restaurant_id),
         ).size,
@@ -3111,9 +3243,9 @@ export const getManagerStatsFn = createServerFn({ method: "POST" })
         .sort((a, b) => b.amount - a.amount)
         .slice(0, 20),
       recentWriteOffs: recentWriteOffs.slice(0, 10),
-      bar_staff:
-        ctx.user.role === "bar_manager"
-          ? (barStaff ?? []).map((staff) => ({
+      area_staff:
+        areaManagerArea(ctx.user.role) != null
+          ? (areaStaff ?? []).map((staff) => ({
               ...staff,
               restaurant_name: staff.restaurant_id
                 ? (availableRestaurantById.get(staff.restaurant_id) ?? "Неизвестный ресторан")

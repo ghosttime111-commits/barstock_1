@@ -19,7 +19,7 @@ import { useState } from "react";
 export const Route = createFileRoute("/reports/")({
   head: () => ({ meta: [{ title: "Отчёты — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant", "bar_manager", "super_admin"]}>
+    <AppShell allow={["accountant", "bar_manager", "kitchen_area_manager", "super_admin"]}>
       <ReportsListPage />
     </AppShell>
   ),
@@ -39,6 +39,8 @@ function ReportsListPage() {
   const sessionToken = session?.session_token ?? null;
   const isSuperAdmin = session?.user.role === "super_admin";
   const isBarManager = session?.user.role === "bar_manager";
+  const isKitchenAreaManager = session?.user.role === "kitchen_area_manager";
+  const managedArea = isBarManager ? "bar" : isKitchenAreaManager ? "kitchen" : null;
   const [networkId, setNetworkId] = useState<string>("all");
 
   const { data: networks = [] } = useQuery({
@@ -66,7 +68,7 @@ function ReportsListPage() {
         data: {
           restaurant_id: restaurantId === "all" ? null : restaurantId,
           network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
-          area: isBarManager ? "bar" : area === "all" ? null : area,
+          area: managedArea ?? (area === "all" ? null : area),
           session_token: sessionToken!,
         },
       }),
@@ -130,14 +132,10 @@ function ReportsListPage() {
             ))}
           </select>
         </label>
-        <AreaFilter
-          value={isBarManager ? "bar" : area}
-          onChange={setArea}
-          disabled={isBarManager}
-        />
+        <AreaFilter value={managedArea ?? area} onChange={setArea} disabled={managedArea != null} />
       </div>
 
-      {!isBarManager && (
+      {managedArea == null && (
         <section className="rounded-xl border border-border bg-card p-4">
           <h2 className="text-lg font-semibold">Экспорт архива</h2>
           <p className="mt-1 text-sm text-muted-foreground">

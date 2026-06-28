@@ -29,6 +29,7 @@ export const Route = createFileRoute("/messages")({
         "accountant",
         "manager",
         "bar_manager",
+        "kitchen_area_manager",
         "super_admin",
       ]}
     >
@@ -38,14 +39,23 @@ export const Route = createFileRoute("/messages")({
 });
 
 type Priority = "normal" | "important" | "urgent";
-type AudienceChoice = "all_staff" | "restaurant" | "bar_staff" | "bar_restaurant";
+type AudienceChoice =
+  | "all_staff"
+  | "restaurant"
+  | "bar_staff"
+  | "bar_restaurant"
+  | "kitchen_staff"
+  | "kitchen_restaurant";
 
 function MessagesPage() {
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
   const role = session?.user.role;
-  const canPublish = role === "bar_manager" || role === "super_admin";
+  const canPublish =
+    role === "bar_manager" || role === "kitchen_area_manager" || role === "super_admin";
   const isSuperAdmin = role === "super_admin";
+  const publisherArea =
+    role === "bar_manager" ? "bar" : role === "kitchen_area_manager" ? "kitchen" : null;
   const queryClient = useQueryClient();
   const listAnnouncements = useServerFn(listAnnouncementsFn);
   const listNetworks = useServerFn(listRestaurantNetworksFn);
@@ -137,6 +147,7 @@ function MessagesPage() {
           networkId={networkId}
           requireNetwork={isSuperAdmin}
           restaurants={restaurants}
+          publisherArea={publisherArea}
         />
       )}
 
@@ -227,11 +238,13 @@ function AnnouncementForm({
   networkId,
   requireNetwork,
   restaurants,
+  publisherArea,
 }: {
   sessionToken: string | null;
   networkId: string;
   requireNetwork: boolean;
   restaurants: Array<{ id: string; name: string }>;
+  publisherArea: "bar" | "kitchen" | null;
 }) {
   const createAnnouncement = useServerFn(createAnnouncementFn);
   const queryClient = useQueryClient();
@@ -251,9 +264,18 @@ function AnnouncementForm({
           title: title.trim(),
           body: body.trim(),
           priority,
-          audience_type: audience === "bar_restaurant" ? "bar_staff" : audience,
+          audience_type:
+            audience === "bar_restaurant"
+              ? "bar_staff"
+              : audience === "kitchen_restaurant"
+                ? "kitchen_staff"
+                : audience,
           target_restaurant_id:
-            audience === "restaurant" || audience === "bar_restaurant" ? restaurantId : null,
+            audience === "restaurant" ||
+            audience === "bar_restaurant" ||
+            audience === "kitchen_restaurant"
+              ? restaurantId
+              : null,
           expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
         },
       }),
@@ -272,7 +294,12 @@ function AnnouncementForm({
   function publish() {
     if (!title.trim() || !body.trim()) return;
     if (requireNetwork && !networkId) return;
-    if ((audience === "restaurant" || audience === "bar_restaurant") && !restaurantId) {
+    if (
+      (audience === "restaurant" ||
+        audience === "bar_restaurant" ||
+        audience === "kitchen_restaurant") &&
+      !restaurantId
+    ) {
       return;
     }
     if (!window.confirm("Опубликовать сообщение для выбранных сотрудников?")) return;
@@ -308,11 +335,23 @@ function AnnouncementForm({
           >
             <option value="all_staff">Весь персонал сети</option>
             <option value="restaurant">Персонал конкретного ресторана</option>
-            <option value="bar_staff">Сотрудники бара всей сети</option>
-            <option value="bar_restaurant">Сотрудники бара конкретного ресторана</option>
+            {(publisherArea == null || publisherArea === "bar") && (
+              <>
+                <option value="bar_staff">Сотрудники бара всей сети</option>
+                <option value="bar_restaurant">Сотрудники бара конкретного ресторана</option>
+              </>
+            )}
+            {(publisherArea == null || publisherArea === "kitchen") && (
+              <>
+                <option value="kitchen_staff">Сотрудники кухни всей сети</option>
+                <option value="kitchen_restaurant">Сотрудники кухни конкретного ресторана</option>
+              </>
+            )}
           </select>
         </Field>
-        {(audience === "restaurant" || audience === "bar_restaurant") && (
+        {(audience === "restaurant" ||
+          audience === "bar_restaurant" ||
+          audience === "kitchen_restaurant") && (
           <Field label="Ресторан">
             <select
               value={restaurantId}
@@ -373,6 +412,11 @@ function audienceLabel(announcement: {
   if (announcement.audience_type === "all_staff") return "Весь персонал";
   if (announcement.audience_type === "restaurant") {
     return announcement.target_restaurant_name ?? "Ресторан";
+  }
+  if (announcement.audience_type === "kitchen_staff") {
+    return announcement.target_restaurant_name
+      ? `Кухня · ${announcement.target_restaurant_name}`
+      : "Сотрудники кухни";
   }
   return announcement.target_restaurant_name
     ? `Бар · ${announcement.target_restaurant_name}`

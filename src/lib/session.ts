@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import type { PermissionKey, SerializableAuthorization } from "./authorization";
+
 export type BarstockRole =
   | "bartender"
   | "kitchen_manager"
@@ -20,6 +22,8 @@ export type BarstockSession = {
   };
   network: { id: string; name: string; is_active?: boolean } | null;
   restaurant: { id: string; name: string } | null;
+  permissions: PermissionKey[];
+  scope: SerializableAuthorization["scope"];
   session_token: string;
 };
 

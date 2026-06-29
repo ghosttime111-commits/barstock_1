@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { loginFn } from "@/lib/barstock.functions";
+import { getDefaultPath } from "@/lib/authorization";
 import { setSession, useSession } from "@/lib/session";
 
 export const Route = createFileRoute("/login")({
@@ -14,15 +15,6 @@ export const Route = createFileRoute("/login")({
   }),
   component: LoginPage,
 });
-
-function homeForRole(role: string) {
-  if (role === "super_admin") return "/admin" as const;
-  if (role === "accountant") return "/reports" as const;
-  if (role === "manager" || role === "bar_manager" || role === "kitchen_area_manager") {
-    return "/manager" as const;
-  }
-  return "/inventories" as const;
-}
 
 function LoginPage() {
   const navigate = useNavigate();
@@ -35,7 +27,10 @@ function LoginPage() {
 
   useEffect(() => {
     if (ready && session) {
-      navigate({ to: homeForRole(session.user.role), replace: true });
+      navigate({
+        to: Array.isArray(session.permissions) ? getDefaultPath(session) : "/",
+        replace: true,
+      });
     }
   }, [ready, session, navigate]);
 
@@ -46,7 +41,7 @@ function LoginPage() {
     try {
       const res = await login({ data: { login: loginValue.trim(), password } });
       setSession(res);
-      navigate({ to: homeForRole(res.user.role), replace: true });
+      navigate({ to: getDefaultPath(res), replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка входа");
     } finally {

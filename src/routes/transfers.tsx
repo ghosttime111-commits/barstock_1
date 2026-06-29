@@ -5,6 +5,7 @@ import { ArrowDownLeft, ArrowRightLeft, ArrowUpRight, Check, X } from "lucide-re
 import { useMemo, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,17 +23,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/transfers")({
   head: () => ({ meta: [{ title: "Перемещения — BarStock" }] }),
   component: () => (
-    <AppShell
-      allow={[
-        "bartender",
-        "kitchen_manager",
-        "accountant",
-        "manager",
-        "bar_manager",
-        "kitchen_area_manager",
-        "super_admin",
-      ]}
-    >
+    <AppShell permission={PERMISSIONS.TRANSFERS_VIEW}>
       <TransfersPage />
     </AppShell>
   ),
@@ -71,12 +62,9 @@ function currentMonth() {
 function TransfersPage() {
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
-  const role = session?.user.role;
-  const isOperational = role === "bartender" || role === "kitchen_manager";
-  const isBarManager = role === "bar_manager";
-  const isKitchenAreaManager = role === "kitchen_area_manager";
-  const managedArea = isBarManager ? "bar" : isKitchenAreaManager ? "kitchen" : null;
-  const isSuperAdmin = role === "super_admin";
+  const isOperational = hasSerializedPermission(session, PERMISSIONS.TRANSFERS_CREATE);
+  const managedArea = session?.scope.area === "all" ? null : session?.scope.area;
+  const isSuperAdmin = session?.scope.network === "all";
   const [month, setMonth] = useState(currentMonth());
   const [networkId, setNetworkId] = useState("all");
   const [restaurantId, setRestaurantId] = useState("all");
@@ -155,7 +143,7 @@ function TransfersPage() {
               currentRestaurantId={session?.user.restaurant_id ?? ""}
               showNetwork={isSuperAdmin}
               canReceive={false}
-              canCancel={role === "accountant" || role === "super_admin"}
+              canCancel={hasSerializedPermission(session, PERMISSIONS.TRANSFERS_CANCEL)}
             />
           )}
         </>

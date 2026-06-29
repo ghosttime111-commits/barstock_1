@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import { ArrowLeft, CheckCircle2, Save, Upload } from "lucide-react";
 import * as XLSX from "xlsx";
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS } from "@/lib/authorization";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +17,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/reports/expected/$id")({
   head: () => ({ meta: [{ title: "Учётные остатки — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant", "super_admin"]}>
+    <AppShell permission={PERMISSIONS.REPORTS_EDIT_ACCOUNTING}>
       <ExpectedPage />
     </AppShell>
   ),

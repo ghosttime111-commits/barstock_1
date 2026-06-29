@@ -5,6 +5,7 @@ import { Users } from "lucide-react";
 import { useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS } from "@/lib/authorization";
 import { Badge } from "@/components/ui/badge";
 import { listAreaStaffFn, listRestaurantsFn } from "@/lib/barstock.functions";
 import { useSession } from "@/lib/session";
@@ -12,7 +13,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/staff")({
   head: () => ({ meta: [{ title: "Сотрудники — BarStock" }] }),
   component: () => (
-    <AppShell allow={["bar_manager", "kitchen_area_manager"]}>
+    <AppShell permission={PERMISSIONS.STAFF_DIRECTORY}>
       <StaffPage />
     </AppShell>
   ),
@@ -21,7 +22,7 @@ export const Route = createFileRoute("/staff")({
 function StaffPage() {
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
-  const isKitchen = session?.user.role === "kitchen_area_manager";
+  const isKitchen = session?.scope.area === "kitchen";
   const [restaurantId, setRestaurantId] = useState("all");
   const listStaff = useServerFn(listAreaStaffFn);
   const listRestaurants = useServerFn(listRestaurantsFn);

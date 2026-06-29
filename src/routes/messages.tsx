@@ -5,6 +5,7 @@ import { EyeOff, Megaphone, Send } from "lucide-react";
 import { useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,17 +23,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/messages")({
   head: () => ({ meta: [{ title: "Сообщения персоналу — BarStock" }] }),
   component: () => (
-    <AppShell
-      allow={[
-        "bartender",
-        "kitchen_manager",
-        "accountant",
-        "manager",
-        "bar_manager",
-        "kitchen_area_manager",
-        "super_admin",
-      ]}
-    >
+    <AppShell permission={PERMISSIONS.ANNOUNCEMENTS_VIEW}>
       <MessagesPage />
     </AppShell>
   ),
@@ -50,12 +41,9 @@ type AudienceChoice =
 function MessagesPage() {
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
-  const role = session?.user.role;
-  const canPublish =
-    role === "bar_manager" || role === "kitchen_area_manager" || role === "super_admin";
-  const isSuperAdmin = role === "super_admin";
-  const publisherArea =
-    role === "bar_manager" ? "bar" : role === "kitchen_area_manager" ? "kitchen" : null;
+  const canPublish = hasSerializedPermission(session, PERMISSIONS.ANNOUNCEMENTS_CREATE);
+  const isSuperAdmin = session?.scope.network === "all";
+  const publisherArea = session?.scope.area === "all" ? null : (session?.scope.area ?? null);
   const queryClient = useQueryClient();
   const listAnnouncements = useServerFn(listAnnouncementsFn);
   const listNetworks = useServerFn(listRestaurantNetworksFn);
@@ -78,7 +66,7 @@ function MessagesPage() {
           network_id: isSuperAdmin ? networkId || null : null,
         },
       }),
-    enabled: !!sessionToken && (!isSuperAdmin || Boolean(networkId)),
+    enabled: !!sessionToken && canPublish && (!isSuperAdmin || Boolean(networkId)),
   });
   const { data, isLoading, error } = useQuery({
     queryKey: ["announcements", session?.user.id, networkId],

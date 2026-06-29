@@ -9,6 +9,7 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "start": "vite preview",
+    "test:authorization": "node --test --experimental-strip-types src/lib/authorization.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

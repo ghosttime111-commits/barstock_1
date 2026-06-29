@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, ClipboardList, Loader2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { createInventoryFn, listInventoriesFn } from "@/lib/barstock.functions";
@@ -13,7 +14,7 @@ export const Route = createFileRoute("/inventories/")({
     meta: [{ title: "Переучёты — BarStock" }],
   }),
   component: () => (
-    <AppShell allow={["bartender", "kitchen_manager"]}>
+    <AppShell permission={PERMISSIONS.INVENTORIES_VIEW}>
       <InventoriesPage />
     </AppShell>
   ),
@@ -26,6 +27,7 @@ function InventoriesPage() {
   const list = useServerFn(listInventoriesFn);
   const create = useServerFn(createInventoryFn);
   const sessionToken = session?.session_token ?? null;
+  const canCreate = hasSerializedPermission(session, PERMISSIONS.INVENTORIES_CREATE);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["inventories", sessionToken, session?.user.role],
@@ -51,14 +53,16 @@ function InventoriesPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Переучёты</h1>
           <p className="text-sm text-muted-foreground">Все сессии переучёта вашего бара.</p>
         </div>
-        <Button onClick={() => createMut.mutate()} disabled={createMut.isPending}>
-          {createMut.isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Plus className="size-4" />
-          )}
-          Новый переучёт
-        </Button>
+        {canCreate && (
+          <Button onClick={() => createMut.mutate()} disabled={createMut.isPending}>
+            {createMut.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Plus className="size-4" />
+            )}
+            Новый переучёт
+          </Button>
+        )}
       </div>
 
       {createMut.error && (

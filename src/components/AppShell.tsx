@@ -28,6 +28,12 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { currentSessionFn, listAnnouncementsFn } from "@/lib/barstock.functions";
+import {
+  PERMISSIONS,
+  getDefaultPath,
+  hasSerializedPermission,
+  type PermissionKey,
+} from "@/lib/authorization";
 import { setSession, useSession } from "@/lib/session";
 
 export type AllowedRole =
@@ -49,70 +55,82 @@ type NavigationPath =
   | "/admin"
   | "/manager"
   | "/security";
-type NavigationItem = { label: string; to: NavigationPath; icon: LucideIcon };
+type NavigationItem = {
+  label: string;
+  to: NavigationPath;
+  icon: LucideIcon;
+  permission: PermissionKey;
+};
 
 const inventoriesItem: NavigationItem = {
   label: "Переучёты",
   to: "/inventories",
   icon: ClipboardCheck,
+  permission: PERMISSIONS.INVENTORIES_VIEW,
 };
-const reportsItem: NavigationItem = { label: "Отчёты", to: "/reports", icon: ClipboardList };
+const reportsItem: NavigationItem = {
+  label: "Отчёты",
+  to: "/reports",
+  icon: ClipboardList,
+  permission: PERMISSIONS.REPORTS_LIST,
+};
 const writeOffsItem: NavigationItem = {
   label: "Списания",
   to: "/write-offs",
   icon: ReceiptText,
+  permission: PERMISSIONS.WRITE_OFFS_VIEW,
 };
 const transfersItem: NavigationItem = {
   label: "Перемещения",
   to: "/transfers",
   icon: ArrowRightLeft,
+  permission: PERMISSIONS.TRANSFERS_VIEW,
 };
 const messagesItem: NavigationItem = {
   label: "Сообщения персоналу",
   to: "/messages",
   icon: MessageSquareText,
+  permission: PERMISSIONS.ANNOUNCEMENTS_VIEW,
 };
-const staffItem: NavigationItem = { label: "Сотрудники", to: "/staff", icon: Users };
-const adminItem: NavigationItem = { label: "Управление", to: "/admin", icon: Settings };
-const managerItem: NavigationItem = { label: "Статистика", to: "/manager", icon: BarChart3 };
+const staffItem: NavigationItem = {
+  label: "Сотрудники",
+  to: "/staff",
+  icon: Users,
+  permission: PERMISSIONS.STAFF_DIRECTORY,
+};
+const adminItem: NavigationItem = {
+  label: "Управление",
+  to: "/admin",
+  icon: Settings,
+  permission: PERMISSIONS.ADMIN_ACCESS,
+};
+const managerItem: NavigationItem = {
+  label: "Статистика",
+  to: "/manager",
+  icon: BarChart3,
+  permission: PERMISSIONS.STATISTICS_VIEW,
+};
 const securityItem: NavigationItem = {
   label: "Журнал входов",
   to: "/security",
   icon: ShieldCheck,
+  permission: PERMISSIONS.LOGIN_HISTORY_VIEW,
 };
 
-const navigationByRole: Record<AllowedRole, NavigationItem[]> = {
-  bartender: [inventoriesItem, writeOffsItem, transfersItem, messagesItem],
-  kitchen_manager: [inventoriesItem, writeOffsItem, transfersItem, messagesItem],
-  accountant: [reportsItem, writeOffsItem, transfersItem, adminItem, managerItem, messagesItem],
-  manager: [managerItem, transfersItem, messagesItem],
-  bar_manager: [managerItem, reportsItem, writeOffsItem, transfersItem, staffItem, messagesItem],
-  kitchen_area_manager: [
-    managerItem,
-    reportsItem,
-    writeOffsItem,
-    transfersItem,
-    staffItem,
-    messagesItem,
-  ],
-  super_admin: [
-    adminItem,
-    reportsItem,
-    writeOffsItem,
-    transfersItem,
-    managerItem,
-    messagesItem,
-    securityItem,
-  ],
-};
+const navigationItems = [
+  inventoriesItem,
+  reportsItem,
+  writeOffsItem,
+  transfersItem,
+  adminItem,
+  managerItem,
+  staffItem,
+  messagesItem,
+  securityItem,
+];
 
-function homePathForRole(role: string) {
-  if (role === "super_admin") return "/admin" as const;
-  if (role === "accountant") return "/reports" as const;
-  if (role === "manager" || role === "bar_manager" || role === "kitchen_area_manager") {
-    return "/manager" as const;
-  }
-  return "/inventories" as const;
+function homePathForSession(session: { permissions?: PermissionKey[] }): NavigationPath {
+  return getDefaultPath(session);
 }
 
 function roleLabel(role: string) {
@@ -127,11 +145,10 @@ function roleLabel(role: string) {
 
 export function AppShell({
   children,
-  allow,
+  permission,
 }: {
   children: ReactNode;
-  /** Если задано — пускаем только указанные роли, иначе редирект на дефолтную страницу роли. */
-  allow?: AllowedRole[];
+  permission?: PermissionKey;
 }) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -163,10 +180,8 @@ export function AppShell({
       navigate({ to: "/login", replace: true });
       return;
     }
-    if (allow && !allow.includes(session.user.role as AllowedRole)) {
-      navigate({ to: homePathForRole(session.user.role), replace: true });
-    }
-  }, [ready, session, allow, navigate]);
+    if (!Array.isArray(session.permissions)) return;
+  }, [ready, session, navigate]);
 
   useEffect(() => {
     if (!session || !freshSession) return;
@@ -178,21 +193,45 @@ export function AppShell({
       session.restaurant?.id !== freshSession.restaurant?.id ||
       session.restaurant?.name !== freshSession.restaurant?.name ||
       session.user.name !== freshSession.user.name ||
-      session.user.role !== freshSession.user.role;
+      session.user.role !== freshSession.user.role ||
+      JSON.stringify(session.permissions ?? []) !== JSON.stringify(freshSession.permissions) ||
+      JSON.stringify(session.scope ?? null) !== JSON.stringify(freshSession.scope);
     if (changed) setSession(freshSession);
   }, [freshSession, session]);
 
-  if (!ready || !session || (allow && !allow.includes(session.user.role as AllowedRole))) {
+  if (!ready || !session || !Array.isArray(session.permissions)) {
     return (
       <div className="flex min-h-screen items-center justify-center text-muted-foreground">
         Загрузка…
       </div>
     );
   }
+  if (permission && !hasSerializedPermission(session, permission)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <div className="max-w-md text-center">
+          <h1 className="text-xl font-semibold">Недостаточно прав</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Этот раздел недоступен для вашей текущей роли.
+          </p>
+          <Button className="mt-4" onClick={() => navigate({ to: homePathForSession(session) })}>
+            Вернуться
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   const role = session.user.role as AllowedRole;
-  const navigation = navigationByRole[role] ?? [];
-  const homePath = homePathForRole(role);
+  const navigation = navigationItems.filter((item) => {
+    if (!hasSerializedPermission(session, item.permission)) return false;
+    if (item.to === "/inventories" && session.scope.restaurant !== "own") return false;
+    if (item.to === "/staff" && hasSerializedPermission(session, PERMISSIONS.ADMIN_ACCESS)) {
+      return false;
+    }
+    return true;
+  });
+  const homePath = homePathForSession(session);
 
   function logout() {
     setMobileMenuOpen(false);

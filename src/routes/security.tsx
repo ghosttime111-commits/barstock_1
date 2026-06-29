@@ -5,6 +5,7 @@ import { Search, ShieldCheck } from "lucide-react";
 import { useDeferredValue, useState, type ReactNode } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS } from "@/lib/authorization";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { listLoginEventsFn } from "@/lib/barstock.functions";
@@ -13,7 +14,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/security")({
   head: () => ({ meta: [{ title: "Журнал входов — BarStock" }] }),
   component: () => (
-    <AppShell allow={["super_admin"]}>
+    <AppShell permission={PERMISSIONS.LOGIN_HISTORY_VIEW}>
       <LoginEventsPage />
     </AppShell>
   ),

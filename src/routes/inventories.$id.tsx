@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Lock, Search } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +28,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/inventories/$id")({
   head: () => ({ meta: [{ title: "Переучёт — BarStock" }] }),
   component: () => (
-    <AppShell allow={["bartender", "kitchen_manager"]}>
+    <AppShell permission={PERMISSIONS.INVENTORIES_VIEW}>
       <InventoryDetail />
     </AppShell>
   ),
@@ -42,6 +43,8 @@ function InventoryDetail() {
   const getEntries = useServerFn(getInventoryEntriesFn);
   const upsert = useServerFn(upsertItemFn);
   const close = useServerFn(closeInventoryFn);
+  const canEditItems = hasSerializedPermission(session, PERMISSIONS.INVENTORIES_EDIT);
+  const canClose = hasSerializedPermission(session, PERMISSIONS.INVENTORIES_CLOSE);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["inventory", id],
@@ -154,7 +157,8 @@ function InventoryDetail() {
   }
 
   const { inventory, categories, products } = data;
-  const canEdit = inventory.status === "draft" || inventory.status === "correction_required";
+  const canEdit =
+    canEditItems && (inventory.status === "draft" || inventory.status === "correction_required");
   const counted = itemsMap.size;
   const missingCount = Math.max(products.length - counted, 0);
 
@@ -195,7 +199,7 @@ function InventoryDetail() {
           <Badge variant={canEdit ? "default" : "secondary"}>
             {inventoryStatusLabel(inventory.status)}
           </Badge>
-          {canEdit && (
+          {canClose && canEdit && (
             <Button onClick={closeWithMissingCheck} disabled={closeMut.isPending}>
               <Lock className="size-4" /> Закрыть
             </Button>

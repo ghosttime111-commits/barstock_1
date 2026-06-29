@@ -5,6 +5,7 @@ import { Building2, Package, RotateCcw, Save, Tags, Trash2, UserPlus } from "luc
 import { useMemo, useState, type FormEvent } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -34,7 +35,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/admin")({
   head: () => ({ meta: [{ title: "Управление — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant", "super_admin"]}>
+    <AppShell permission={PERMISSIONS.ADMIN_ACCESS}>
       <AdminPage />
     </AppShell>
   ),
@@ -220,7 +221,7 @@ function batchSaveResult<T extends { id: string }>(
 function AdminPage() {
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
-  const isSuperAdmin = session?.user.role === "super_admin";
+  const isSuperAdmin = hasSerializedPermission(session, PERMISSIONS.NETWORKS_MANAGE);
   const availableStaffRoles = isSuperAdmin ? superAdminStaffRoles : accountantStaffRoles;
   const queryClient = useQueryClient();
 

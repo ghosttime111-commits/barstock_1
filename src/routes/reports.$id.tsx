@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,9 +37,7 @@ import { Textarea } from "@/components/ui/textarea";
 export const Route = createFileRoute("/reports/$id")({
   head: () => ({ meta: [{ title: "Отчёт по переучёту — BarStock" }] }),
   component: () => (
-    <AppShell
-      allow={["accountant", "manager", "bar_manager", "kitchen_area_manager", "super_admin"]}
-    >
+    <AppShell permission={PERMISSIONS.REPORTS_VIEW}>
       <ReportPage />
     </AppShell>
   ),
@@ -50,7 +49,11 @@ function ReportPage() {
   const { id } = Route.useParams();
   const { session } = useSession();
   const sessionToken = session?.session_token ?? null;
-  const isAccountant = session?.user.role === "accountant" || session?.user.role === "super_admin";
+  const canEditAccounting = hasSerializedPermission(session, PERMISSIONS.REPORTS_EDIT_ACCOUNTING);
+  const canExport = hasSerializedPermission(session, PERMISSIONS.REPORTS_EXPORT);
+  const canReopen = hasSerializedPermission(session, PERMISSIONS.INVENTORIES_REOPEN);
+  const canDelete = hasSerializedPermission(session, PERMISSIONS.INVENTORIES_DELETE);
+  const hasReportsList = hasSerializedPermission(session, PERMISSIONS.REPORTS_LIST);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const getReport = useServerFn(getInventoryReportFn);
@@ -147,10 +150,10 @@ function ReportPage() {
     <div className="space-y-6">
       <div>
         <Link
-          to={isAccountant ? "/reports" : "/manager"}
+          to={hasReportsList ? "/reports" : "/manager"}
           className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
         >
-          <ArrowLeft className="size-4" /> {isAccountant ? "К отчётам" : "К статистике"}
+          <ArrowLeft className="size-4" /> {hasReportsList ? "К отчётам" : "К статистике"}
         </Link>
         <h1 className="text-2xl font-semibold tracking-tight">
           Отчёт по переучёту от{" "}
@@ -172,7 +175,7 @@ function ReportPage() {
             <span className="text-sm text-muted-foreground">Предварительный отчёт</span>
           )}
         </div>
-        {isAccountant && (
+        {canEditAccounting && (
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
             <Link
               to="/reports/expected/$id"
@@ -205,39 +208,45 @@ function ReportPage() {
         />
       </div>
 
-      {isAccountant && (
+      {(canExport || canReopen || canDelete) && (
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="secondary" onClick={() => exportInventoryToExcel(data)}>
-            <Download className="size-4" /> Скачать Excel
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={correctionMutation.isPending || isCorrectionRequired}
-            onClick={() => setCorrectionOpen(true)}
-          >
-            <RotateCcw className="size-4" />
-            Вернуть на доработку
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={confirmAndDelete}
-            disabled={deleteMutation.isPending}
-          >
-            <Trash2 className="size-4" />
-            {deleteMutation.isPending ? "Удаление..." : "Удалить переучёт"}
-          </Button>
+          {canExport && (
+            <Button type="button" variant="secondary" onClick={() => exportInventoryToExcel(data)}>
+              <Download className="size-4" /> Скачать Excel
+            </Button>
+          )}
+          {canReopen && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={correctionMutation.isPending || isCorrectionRequired}
+              onClick={() => setCorrectionOpen(true)}
+            >
+              <RotateCcw className="size-4" />
+              Вернуть на доработку
+            </Button>
+          )}
+          {canDelete && (
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={confirmAndDelete}
+              disabled={deleteMutation.isPending}
+            >
+              <Trash2 className="size-4" />
+              {deleteMutation.isPending ? "Удаление..." : "Удалить переучёт"}
+            </Button>
+          )}
         </div>
       )}
-      {isAccountant && deleteMutation.error && (
+      {canDelete && deleteMutation.error && (
         <p className="text-sm text-destructive">
           {deleteMutation.error instanceof Error
             ? deleteMutation.error.message
             : "Не удалось удалить переучёт"}
         </p>
       )}
-      {isAccountant && correctionMutation.error && (
+      {canReopen && correctionMutation.error && (
         <p className="text-sm text-destructive">
           {correctionMutation.error instanceof Error
             ? correctionMutation.error.message
@@ -245,7 +254,7 @@ function ReportPage() {
         </p>
       )}
 
-      {isAccountant && (
+      {canReopen && (
         <Dialog open={correctionOpen} onOpenChange={setCorrectionOpen}>
           <DialogContent>
             <DialogHeader>

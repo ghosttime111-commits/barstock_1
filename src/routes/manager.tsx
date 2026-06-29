@@ -15,6 +15,7 @@ import {
 import { useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Badge } from "@/components/ui/badge";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { Input } from "@/components/ui/input";
@@ -26,9 +27,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/manager")({
   head: () => ({ meta: [{ title: "Статистика — BarStock" }] }),
   component: () => (
-    <AppShell
-      allow={["manager", "bar_manager", "kitchen_area_manager", "accountant", "super_admin"]}
-    >
+    <AppShell permission={PERMISSIONS.STATISTICS_VIEW}>
       <ManagerPage />
     </AppShell>
   ),
@@ -56,10 +55,9 @@ function ManagerPage() {
   const [restaurantId, setRestaurantId] = useState("all");
   const [area, setArea] = useState("all");
   const [networkId, setNetworkId] = useState("all");
-  const isSuperAdmin = session?.user.role === "super_admin";
-  const isBarManager = session?.user.role === "bar_manager";
-  const isKitchenAreaManager = session?.user.role === "kitchen_area_manager";
-  const managedArea = isBarManager ? "bar" : isKitchenAreaManager ? "kitchen" : null;
+  const isSuperAdmin = session?.scope.network === "all";
+  const managedArea = session?.scope.area === "all" ? null : session?.scope.area;
+  const canViewStaff = hasSerializedPermission(session, PERMISSIONS.STAFF_VIEW);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["manager-stats", month, networkId, restaurantId, area, session?.user.restaurant_id],
@@ -328,7 +326,7 @@ function ManagerPage() {
             />
           </StatsSection>
 
-          {managedArea && (
+          {managedArea && canViewStaff && (
             <StatsSection
               title={managedArea === "kitchen" ? "Сотрудники кухни" : "Сотрудники бара"}
             >

@@ -5,6 +5,7 @@ import { Download, ReceiptText } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,16 +24,7 @@ import { useSession } from "@/lib/session";
 export const Route = createFileRoute("/write-offs")({
   head: () => ({ meta: [{ title: "Списания — BarStock" }] }),
   component: () => (
-    <AppShell
-      allow={[
-        "bartender",
-        "kitchen_manager",
-        "accountant",
-        "bar_manager",
-        "kitchen_area_manager",
-        "super_admin",
-      ]}
-    >
+    <AppShell permission={PERMISSIONS.WRITE_OFFS_VIEW}>
       <WriteOffsPage />
     </AppShell>
   ),
@@ -47,18 +39,15 @@ function WriteOffsPage() {
   const listWriteOffs = useServerFn(listWriteOffsFn);
   const listNetworks = useServerFn(listRestaurantNetworksFn);
   const sessionToken = session?.session_token ?? null;
-  const isBarManager = session?.user.role === "bar_manager";
-  const isKitchenAreaManager = session?.user.role === "kitchen_area_manager";
-  const managedArea = isBarManager ? "bar" : isKitchenAreaManager ? "kitchen" : null;
-  const isAccountant =
-    session?.user.role === "accountant" ||
-    managedArea != null ||
-    session?.user.role === "super_admin";
+  const managedArea = session?.scope.area === "all" ? null : session?.scope.area;
+  const hasNetworkView = session?.scope.restaurant !== "own";
+  const canCreate = hasSerializedPermission(session, PERMISSIONS.WRITE_OFFS_CREATE);
+  const canExport = hasSerializedPermission(session, PERMISSIONS.WRITE_OFFS_EXPORT);
   const [month, setMonth] = useState(currentMonth());
   const [restaurantId, setRestaurantId] = useState("all");
   const [area, setArea] = useState("all");
   const [networkId, setNetworkId] = useState("all");
-  const isSuperAdmin = session?.user.role === "super_admin";
+  const isSuperAdmin = session?.scope.network === "all";
 
   const { data: networks = [] } = useQuery({
     queryKey: ["restaurant-networks"],
@@ -72,12 +61,12 @@ function WriteOffsPage() {
       listWriteOffs({
         data: {
           session_token: sessionToken!,
-          month: isAccountant ? month : null,
+          month: hasNetworkView ? month : null,
           network_id: isSuperAdmin && networkId !== "all" ? networkId : null,
-          restaurant_id: isAccountant && restaurantId !== "all" ? restaurantId : null,
+          restaurant_id: hasNetworkView && restaurantId !== "all" ? restaurantId : null,
           area: managedArea
             ? managedArea
-            : isAccountant && area !== "all"
+            : hasNetworkView && area !== "all"
               ? (area as "bar" | "kitchen")
               : null,
         },
@@ -97,12 +86,12 @@ function WriteOffsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Списания</h1>
           <p className="text-sm text-muted-foreground">
-            {isAccountant ? "Списания по ресторанам и зонам." : "Списание товаров вашей зоны."}
+            {hasNetworkView ? "Списания по ресторанам и зонам." : "Списание товаров вашей зоны."}
           </p>
         </div>
       </div>
 
-      {isAccountant ? (
+      {hasNetworkView ? (
         <div className="space-y-3">
           {isSuperAdmin && (
             <label className="grid max-w-xs gap-1 text-sm">
@@ -134,14 +123,14 @@ function WriteOffsPage() {
             areaDisabled={managedArea != null}
             restaurants={data?.restaurants ?? []}
             onExport={() => exportWriteOffsToExcel(data?.write_offs ?? [], month)}
-            canExport={Boolean(data?.write_offs.length)}
+            canExport={canExport && Boolean(data?.write_offs.length)}
           />
         </div>
-      ) : (
+      ) : canCreate ? (
         <CreateWriteOffForm products={data?.products ?? []} sessionToken={sessionToken} />
-      )}
+      ) : null}
 
-      {isAccountant && data && (
+      {canExport && data && (
         <div className="grid grid-cols-2 gap-3 sm:max-w-lg">
           <Metric label="Всего списаний" value={String(data.write_offs.length)} />
           <Metric label="Списания, BYN" value={formatMoney(totalAmount)} accent />
@@ -154,7 +143,7 @@ function WriteOffsPage() {
           {error instanceof Error ? error.message : "Не удалось загрузить списания"}
         </p>
       )}
-      {data && <WriteOffsTable rows={data.write_offs} showFinance={isAccountant} />}
+      {data && <WriteOffsTable rows={data.write_offs} showFinance={canExport} />}
     </div>
   );
 }

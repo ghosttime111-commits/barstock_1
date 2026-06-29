@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ClipboardCheck, Download } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Badge } from "@/components/ui/badge";
 import {
   getMonthlyArchiveFn,
@@ -19,7 +20,7 @@ import { useState } from "react";
 export const Route = createFileRoute("/reports/")({
   head: () => ({ meta: [{ title: "Отчёты — BarStock" }] }),
   component: () => (
-    <AppShell allow={["accountant", "bar_manager", "kitchen_area_manager", "super_admin"]}>
+    <AppShell permission={PERMISSIONS.REPORTS_LIST}>
       <ReportsListPage />
     </AppShell>
   ),
@@ -37,10 +38,9 @@ function ReportsListPage() {
   const [archiveRestaurantId, setArchiveRestaurantId] = useState<string>("all");
   const [archiveArea, setArchiveArea] = useState<string>("all");
   const sessionToken = session?.session_token ?? null;
-  const isSuperAdmin = session?.user.role === "super_admin";
-  const isBarManager = session?.user.role === "bar_manager";
-  const isKitchenAreaManager = session?.user.role === "kitchen_area_manager";
-  const managedArea = isBarManager ? "bar" : isKitchenAreaManager ? "kitchen" : null;
+  const isSuperAdmin = session?.scope.network === "all";
+  const managedArea = session?.scope.area === "all" ? null : session?.scope.area;
+  const canExport = hasSerializedPermission(session, PERMISSIONS.REPORTS_EXPORT);
   const [networkId, setNetworkId] = useState<string>("all");
 
   const { data: networks = [] } = useQuery({
@@ -135,7 +135,7 @@ function ReportsListPage() {
         <AreaFilter value={managedArea ?? area} onChange={setArea} disabled={managedArea != null} />
       </div>
 
-      {managedArea == null && (
+      {canExport && (
         <section className="rounded-xl border border-border bg-card p-4">
           <h2 className="text-lg font-semibold">Экспорт архива</h2>
           <p className="mt-1 text-sm text-muted-foreground">

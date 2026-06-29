@@ -51,6 +51,33 @@ const roleAccessSchema = z.object({
 });
 const inventoryAreaSchema = z.enum(["bar", "kitchen"]);
 const moneySchema = z.number().min(0).max(1_000_000);
+const productUpdateSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(200),
+  category_id: z.string().uuid(),
+  unit: productUnitSchema,
+  status: productStatusSchema,
+  unit_price: moneySchema,
+  area: inventoryAreaSchema,
+});
+const productsBatchSchema = sessionSchema
+  .extend({
+    products: z.array(productUpdateSchema).min(1).max(100),
+  })
+  .superRefine(({ products }, ctx) => {
+    const ids = new Set<string>();
+    for (const product of products) {
+      if (ids.has(product.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Один товар нельзя отправить на сохранение дважды",
+          path: ["products"],
+        });
+        return;
+      }
+      ids.add(product.id);
+    }
+  });
 const inventoryEntryTypeSchema = z.enum(["add", "set"]);
 const writeOffFiltersSchema = sessionSchema.extend({
   month: z
@@ -1502,6 +1529,66 @@ export const updateProductFn = createServerFn({ method: "POST" })
       .single();
     if (error) throw new Error(error.message);
     return product;
+  });
+
+export const updateProductsBatchFn = createServerFn({ method: "POST" })
+  .inputValidator((input) => productsBatchSchema.parse(input))
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requirePermission(ctx, PERMISSIONS.PRODUCTS_MANAGE);
+
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const productIds = data.products.map((product) => product.id);
+    const categoryIds = [...new Set(data.products.map((product) => product.category_id))];
+
+    const [
+      { data: existingProducts, error: productsError },
+      { data: categories, error: categoriesError },
+    ] = await Promise.all([
+      sb.from("products").select("id,network_id").in("id", productIds),
+      sb.from("categories").select("id,area,network_id").in("id", categoryIds),
+    ]);
+    if (productsError) throw new Error(productsError.message);
+    if ((existingProducts ?? []).length !== productIds.length) {
+      throw new Error("Один или несколько товаров не найдены");
+    }
+
+    const productNetworkById = new Map<string, string>();
+    for (const product of existingProducts ?? []) {
+      if (!product.network_id) throw new Error("Товар не привязан к сети ресторанов");
+      assertSameNetwork(ctx, product.network_id);
+      productNetworkById.set(product.id, product.network_id);
+    }
+
+    if (categoriesError) throw new Error(categoriesError.message);
+    if ((categories ?? []).length !== categoryIds.length) {
+      throw new Error("Одна или несколько категорий не найдены");
+    }
+    const categoryById = new Map((categories ?? []).map((category) => [category.id, category]));
+
+    for (const product of data.products) {
+      const productNetworkId = productNetworkById.get(product.id);
+      const category = categoryById.get(product.category_id);
+      if (!productNetworkId || !category) {
+        throw new Error("Не удалось проверить товар или категорию");
+      }
+      if (category.network_id !== productNetworkId) {
+        throw new Error(`Категория товара "${product.name}" относится к другой сети`);
+      }
+      if ((category.area ?? "bar") !== product.area) {
+        throw new Error(`Зона товара "${product.name}" должна совпадать с зоной категории`);
+      }
+    }
+
+    const { data: updatedProducts, error } = await sb.rpc("update_products_batch", {
+      p_products: data.products,
+    });
+    if (error) throw new Error(error.message);
+    if ((updatedProducts ?? []).length !== data.products.length) {
+      throw new Error("Не все товары были сохранены");
+    }
+    return updatedProducts ?? [];
   });
 
 export const archiveProductFn = createServerFn({ method: "POST" })

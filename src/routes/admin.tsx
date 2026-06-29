@@ -27,9 +27,10 @@ import {
   restoreProductFn,
   updateBartenderRestaurantFn,
   updateCategoryFn,
-  updateProductFn,
+  updateProductsBatchFn,
   updateRestaurantNetworkFn,
 } from "@/lib/barstock.functions";
+import { addProductToCache, replaceProductsInCache } from "@/lib/productCache";
 import { useSession } from "@/lib/session";
 
 export const Route = createFileRoute("/admin")({
@@ -144,6 +145,18 @@ function parseMoneyInput(value: string) {
   return parsed;
 }
 
+function startDevelopmentTimer() {
+  return import.meta.env.DEV ? performance.now() : null;
+}
+
+function logDevelopmentTiming(label: string, startedAt: number | null) {
+  if (import.meta.env.DEV && startedAt !== null) {
+    console.debug(
+      `[BarStock performance] ${label}: ${(performance.now() - startedAt).toFixed(1)}ms`,
+    );
+  }
+}
+
 function productDraftFromProduct(product: Product): ProductDraft {
   return {
     name: product.name,
@@ -242,7 +255,7 @@ function AdminPage() {
   const deleteCategory = useServerFn(deleteCategoryFn);
   const listProducts = useServerFn(listProductsFn);
   const createProduct = useServerFn(createProductFn);
-  const updateProduct = useServerFn(updateProductFn);
+  const updateProductsBatch = useServerFn(updateProductsBatchFn);
   const restoreProduct = useServerFn(restoreProductFn);
 
   const [networkFilter, setNetworkFilter] = useState("all");
@@ -548,16 +561,25 @@ function AdminPage() {
     },
   });
   const createProductMutation = useMutation({
-    mutationFn: () =>
-      createProduct({
+    mutationFn: async () => {
+      const startedAt = startDevelopmentTimer();
+      const product = await createProduct({
         data: {
           ...newProduct,
           network_id: isSuperAdmin ? creationNetworkId : undefined,
           unit_price: parseMoneyInput(newProduct.unit_price),
           session_token: sessionToken!,
         },
-      }),
-    onSuccess: async () => {
+      });
+      logDevelopmentTiming("create product request", startedAt);
+      return product as Product;
+    },
+    onSuccess: (product) => {
+      const cacheStartedAt = startDevelopmentTimer();
+      queryClient.setQueryData<Product[]>(["products", selectedNetworkId], (current) =>
+        addProductToCache(current, product, selectedNetworkId),
+      );
+      logDevelopmentTiming("create product cache update", cacheStartedAt);
       setNewProduct({
         name: "",
         category_id: "",
@@ -566,62 +588,69 @@ function AdminPage() {
         unit_price: "0",
         area: "bar",
       });
-      await refreshAdminData();
+      setProductSaveMessage("Товар создан");
+      void queryClient.invalidateQueries({
+        queryKey: ["products", selectedNetworkId],
+        exact: true,
+      });
     },
   });
   const saveProductsMutation = useMutation({
     mutationFn: async (changes: ProductChange[]) => {
-      const results = await Promise.allSettled(
-        changes.map(async ({ id, draft }) =>
-          updateProduct({
-            data: {
-              id,
-              ...draft,
-              unit_price: parseMoneyInput(draft.unit_price),
-              session_token: sessionToken!,
-            },
-          }),
-        ),
+      const startedAt = startDevelopmentTimer();
+      const updatedProducts = await updateProductsBatch({
+        data: {
+          session_token: sessionToken!,
+          products: changes.map(({ id, draft }) => ({
+            id,
+            ...draft,
+            name: draft.name.trim(),
+            unit_price: parseMoneyInput(draft.unit_price),
+          })),
+        },
+      });
+      logDevelopmentTiming(`batch product request (${changes.length})`, startedAt);
+      return updatedProducts as Product[];
+    },
+    onSuccess: (updatedProducts, changes) => {
+      const cacheStartedAt = startDevelopmentTimer();
+      queryClient.setQueryData<Product[]>(["products", selectedNetworkId], (current) =>
+        replaceProductsInCache(current, updatedProducts, selectedNetworkId),
       );
-      const savedIds = changes
-        .filter((_, index) => results[index].status === "fulfilled")
-        .map(({ id }) => id);
-      const failedChanges = changes.filter((_, index) => results[index].status === "rejected");
-
-      if (failedChanges.length > 0) {
-        const failedNames = failedChanges
-          .map(({ draft }) => draft.name.trim() || "Без названия")
-          .join(", ");
-        const error = new Error(
-          `Не удалось сохранить ${failedChanges.length} товар(а): ${failedNames}`,
-        ) as BatchSaveError;
-        error.savedIds = savedIds;
-        throw error;
-      }
-
-      return { savedIds };
-    },
-    onSuccess: async ({ savedIds }, changes) => {
-      clearSavedProductDrafts(changes, savedIds);
+      logDevelopmentTiming(
+        `batch product cache update (${updatedProducts.length})`,
+        cacheStartedAt,
+      );
+      clearSavedProductDrafts(
+        changes,
+        updatedProducts.map((product) => product.id),
+      );
       setProductSaveMessage("Изменения сохранены");
-      await queryClient.invalidateQueries({ queryKey: ["products"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["products", selectedNetworkId],
+        exact: true,
+      });
     },
-    onError: async (error, changes) => {
-      clearSavedProductDrafts(changes, (error as BatchSaveError).savedIds ?? []);
+    onError: () => {
       setProductSaveMessage(null);
-      await queryClient.invalidateQueries({ queryKey: ["products"] });
     },
   });
   const restoreProductMutation = useMutation({
     mutationFn: (id: string) => restoreProduct({ data: { id, session_token: sessionToken! } }),
-    onSuccess: async (_, id) => {
+    onSuccess: (product, id) => {
+      queryClient.setQueryData<Product[]>(["products", selectedNetworkId], (current) =>
+        addProductToCache(current, product as Product, selectedNetworkId),
+      );
       setProductDrafts((prev) => {
         const next = { ...prev };
         delete next[id];
         return next;
       });
       setProductSaveMessage("Товар восстановлен");
-      await refreshAdminData();
+      void queryClient.invalidateQueries({
+        queryKey: ["products", selectedNetworkId],
+        exact: true,
+      });
     },
   });
 
@@ -746,7 +775,10 @@ function AdminPage() {
 
   function saveProductChanges() {
     const changes = Object.entries(productDrafts).map(([id, draft]) => ({ id, draft }));
-    if (changes.length > 0) saveProductsMutation.mutate(changes);
+    if (changes.length > 0) {
+      setProductSaveMessage(null);
+      saveProductsMutation.mutate(changes);
+    }
   }
 
   function submitRestaurant(event: FormEvent<HTMLFormElement>) {
@@ -1298,7 +1330,7 @@ function AdminPage() {
           </Button>
         </form>
         <ErrorText error={createProductMutation.error} fallback="Не удалось создать товар" />
-        <ErrorText error={saveProductsMutation.error} fallback="Не удалось сохранить изменения" />
+        <ErrorText error={saveProductsMutation.error} fallback="Не удалось сохранить товары" />
         <ErrorText error={restoreProductMutation.error} fallback="Не удалось восстановить товар" />
         {productSaveMessage && (
           <p className="mb-3 text-sm text-muted-foreground">{productSaveMessage}</p>

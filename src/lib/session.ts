@@ -29,14 +29,40 @@ export type BarstockSession = {
 
 const KEY = "barstock.session.v1";
 
+function clearStoredSession() {
+  try {
+    window.localStorage.removeItem(KEY);
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 export function getSession(): BarstockSession | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as BarstockSession;
-    return parsed.session_token ? parsed : null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      !isRecord(parsed) ||
+      typeof parsed.session_token !== "string" ||
+      parsed.session_token.length === 0 ||
+      !isRecord(parsed.user) ||
+      typeof parsed.user.id !== "string" ||
+      parsed.user.id.length === 0 ||
+      typeof parsed.user.role !== "string" ||
+      parsed.user.role.length === 0
+    ) {
+      clearStoredSession();
+      return null;
+    }
+    return parsed as BarstockSession;
   } catch {
+    clearStoredSession();
     return null;
   }
 }
@@ -63,4 +89,36 @@ export function useSession() {
     };
   }, []);
   return { session: s, ready };
+}
+
+export type SessionRecoveryResult =
+  | { status: "loading" }
+  | { status: "refreshing" }
+  | { status: "login" }
+  | { status: "authenticated"; session: BarstockSession };
+
+export function resolveSessionRecovery({
+  ready,
+  session,
+  refreshedSession,
+  refreshPending,
+  refreshError,
+}: {
+  ready: boolean;
+  session: BarstockSession | null;
+  refreshedSession?: BarstockSession;
+  refreshPending: boolean;
+  refreshError: unknown;
+}): SessionRecoveryResult {
+  if (!ready) return { status: "loading" };
+  if (!session) return { status: "login" };
+  if (Array.isArray(session.permissions)) {
+    return { status: "authenticated", session };
+  }
+  if (refreshedSession && Array.isArray(refreshedSession.permissions)) {
+    return { status: "authenticated", session: refreshedSession };
+  }
+  if (refreshError) return { status: "login" };
+  if (refreshPending) return { status: "refreshing" };
+  return { status: "refreshing" };
 }

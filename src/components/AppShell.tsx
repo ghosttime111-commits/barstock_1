@@ -16,7 +16,7 @@ import {
   Wine,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -157,12 +157,18 @@ export function AppShell({
   const listAnnouncements = useServerFn(listAnnouncementsFn);
   const sessionToken = session?.session_token ?? null;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const invalidatedToken = useRef<string | null>(null);
 
-  const { data: freshSession } = useQuery({
+  const {
+    data: freshSession,
+    isError: isSessionError,
+    error: sessionError,
+  } = useQuery({
     queryKey: ["current-session", sessionToken],
     queryFn: () => currentSession({ data: { session_token: sessionToken! } }),
     enabled: !!sessionToken,
     staleTime: 30_000,
+    retry: false,
   });
   const { data: announcementsData } = useQuery({
     queryKey: ["announcements-shell", sessionToken],
@@ -177,11 +183,20 @@ export function AppShell({
   useEffect(() => {
     if (!ready) return;
     if (!session) {
-      navigate({ to: "/login", replace: true });
+      void navigate({ to: "/login", replace: true });
       return;
     }
-    if (!Array.isArray(session.permissions)) return;
-  }, [ready, session, navigate]);
+    const invalidResponse = freshSession && !Array.isArray(freshSession.permissions);
+    if (
+      sessionToken &&
+      (isSessionError || sessionError || invalidResponse) &&
+      invalidatedToken.current !== sessionToken
+    ) {
+      invalidatedToken.current = sessionToken;
+      setSession(null);
+      void navigate({ to: "/login", replace: true });
+    }
+  }, [ready, session, sessionToken, freshSession, isSessionError, sessionError, navigate]);
 
   useEffect(() => {
     if (!session || !freshSession) return;

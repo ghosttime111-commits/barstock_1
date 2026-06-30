@@ -20,6 +20,7 @@ import {
   restoreProductFn,
   updateProductsBatchFn,
 } from "@/lib/barstock.functions";
+import { getCreationCategories } from "@/lib/productCategories";
 import { addProductToCache, replaceProductsInCache } from "@/lib/productCache";
 
 type ProductArea = "bar" | "kitchen";
@@ -124,13 +125,13 @@ export const ProductsSection = memo(function ProductsSection({
   sessionToken,
   isSuperAdmin,
   selectedNetworkId,
-  creationNetworkId,
+  effectiveCreationNetworkId,
   categories,
 }: {
   sessionToken: string;
   isSuperAdmin: boolean;
   selectedNetworkId?: string;
-  creationNetworkId: string;
+  effectiveCreationNetworkId: string;
   categories: AdminCategory[];
 }) {
   const queryClient = useQueryClient();
@@ -316,8 +317,8 @@ export const ProductsSection = memo(function ProductsSection({
         sessionToken={sessionToken}
         isSuperAdmin={isSuperAdmin}
         selectedNetworkId={selectedNetworkId}
-        creationNetworkId={creationNetworkId}
-        categoriesByNetwork={categoriesByNetwork}
+        effectiveCreationNetworkId={effectiveCreationNetworkId}
+        categories={categories}
       />
 
       <ErrorText error={saveProductsMutation.error} fallback="Не удалось сохранить товары" />
@@ -452,14 +453,14 @@ const ProductCreateForm = memo(function ProductCreateForm({
   sessionToken,
   isSuperAdmin,
   selectedNetworkId,
-  creationNetworkId,
-  categoriesByNetwork,
+  effectiveCreationNetworkId,
+  categories,
 }: {
   sessionToken: string;
   isSuperAdmin: boolean;
   selectedNetworkId?: string;
-  creationNetworkId: string;
-  categoriesByNetwork: Map<string, CategoryBuckets>;
+  effectiveCreationNetworkId: string;
+  categories: AdminCategory[];
 }) {
   const queryClient = useQueryClient();
   const createProduct = useServerFn(createProductFn);
@@ -473,9 +474,23 @@ const ProductCreateForm = memo(function ProductCreateForm({
     area: "bar",
   });
 
-  const creationCategories =
-    categoriesByNetwork.get(creationNetworkId)?.[newProduct.area] ??
-    EMPTY_CATEGORIES[newProduct.area];
+  const creationCategories = useMemo(
+    () =>
+      getCreationCategories(categories, effectiveCreationNetworkId, newProduct.area, isSuperAdmin),
+    [categories, effectiveCreationNetworkId, isSuperAdmin, newProduct.area],
+  );
+
+  useEffect(() => {
+    setNewProduct((previous) => {
+      if (
+        !previous.category_id ||
+        creationCategories.some((category) => category.id === previous.category_id)
+      ) {
+        return previous;
+      }
+      return { ...previous, category_id: "" };
+    });
+  }, [creationCategories, effectiveCreationNetworkId, newProduct.area]);
 
   const createProductMutation = useMutation({
     mutationFn: async (draft: ProductDraft) => {
@@ -483,7 +498,7 @@ const ProductCreateForm = memo(function ProductCreateForm({
       const product = await createProduct({
         data: {
           ...draft,
-          network_id: isSuperAdmin ? creationNetworkId : undefined,
+          network_id: isSuperAdmin ? effectiveCreationNetworkId : undefined,
           unit_price: parseMoneyInput(draft.unit_price),
           session_token: sessionToken,
         },
@@ -520,7 +535,7 @@ const ProductCreateForm = memo(function ProductCreateForm({
       newProduct.name.trim() &&
       newProduct.category_id &&
       newProduct.unit &&
-      (!isSuperAdmin || creationNetworkId)
+      (!isSuperAdmin || effectiveCreationNetworkId)
     ) {
       createProductMutation.mutate(newProduct);
     }

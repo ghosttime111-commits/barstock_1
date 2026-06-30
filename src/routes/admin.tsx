@@ -189,6 +189,9 @@ function AdminPage() {
   const [categoryDrafts, setCategoryDrafts] = useState<Record<string, CategoryDraft>>({});
   const [categorySaveMessage, setCategorySaveMessage] = useState<string | null>(null);
   const [categoryAreaFilter, setCategoryAreaFilter] = useState<"all" | ProductArea>("all");
+  const effectiveCreationNetworkId = isSuperAdmin
+    ? creationNetworkId
+    : (session?.user.network_id ?? "");
   const networksQuery = useQuery({
     queryKey: ["restaurant-networks"],
     queryFn: () => listNetworks({ data: { session_token: sessionToken! } }),
@@ -999,7 +1002,7 @@ function AdminPage() {
         sessionToken={sessionToken!}
         isSuperAdmin={isSuperAdmin}
         selectedNetworkId={selectedNetworkId}
-        creationNetworkId={creationNetworkId}
+        effectiveCreationNetworkId={effectiveCreationNetworkId}
         categories={categories}
       />
     </div>

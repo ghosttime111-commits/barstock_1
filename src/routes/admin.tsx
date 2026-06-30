@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, Package, RotateCcw, Save, Tags, Trash2, UserPlus } from "lucide-react";
+import { Building2, Save, Tags, Trash2, UserPlus } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { ProductsSection } from "@/components/admin/ProductsSection";
 import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,6 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   createBartenderFn,
   createCategoryFn,
-  createProductFn,
   createRestaurantFn,
   createRestaurantNetworkFn,
   deleteCategoryFn,
@@ -21,16 +21,12 @@ import {
   deleteRestaurantFn,
   listBartendersFn,
   listCategoriesFn,
-  listProductsFn,
   listRestaurantNetworksFn,
   listRestaurantsFn,
-  restoreProductFn,
   updateBartenderRestaurantFn,
   updateCategoryFn,
-  updateProductsBatchFn,
   updateRestaurantNetworkFn,
 } from "@/lib/barstock.functions";
-import { addProductToCache, replaceProductsInCache } from "@/lib/productCache";
 import { useSession } from "@/lib/session";
 
 export const Route = createFileRoute("/admin")({
@@ -68,28 +64,6 @@ type Category = {
   area?: ProductArea | string | null;
   network_id: string;
 };
-type ProductUnit = "л" | "кг" | "шт" | "бут";
-type ProductStatus = "approved" | "pending" | "archived";
-type ProductStatusFilter = "active" | "archived" | "all";
-type Product = {
-  id: string;
-  name: string;
-  category_id: string | null;
-  unit: ProductUnit | string | null;
-  status: ProductStatus | string | null;
-  unit_price: number | string | null;
-  area?: ProductArea | string | null;
-  network_id: string;
-};
-type ProductDraft = {
-  name: string;
-  category_id: string;
-  unit: ProductUnit;
-  status: ProductStatus;
-  unit_price: string;
-  area: ProductArea;
-};
-type ProductChange = { id: string; draft: ProductDraft };
 type StaffDraft = {
   role: StaffRole;
   restaurant_id: string;
@@ -101,8 +75,6 @@ type CategoryDraft = { name: string; area: ProductArea };
 type CategoryChange = { id: string; draft: CategoryDraft };
 type BatchSaveError = Error & { savedIds?: string[] };
 
-const productUnits: ProductUnit[] = ["л", "кг", "шт", "бут"];
-const productStatuses: ProductStatus[] = ["approved", "pending", "archived"];
 const productAreas: ProductArea[] = ["bar", "kitchen"];
 const accountantStaffRoles: StaffRole[] = ["bartender", "kitchen_manager", "manager"];
 const superAdminStaffRoles: StaffRole[] = [
@@ -127,60 +99,6 @@ function staffRoleLabel(role: string) {
 
 function productAreaLabel(area?: string | null) {
   return area === "kitchen" ? "Кухня" : "Бар";
-}
-
-function productStatusLabel(status: ProductStatus) {
-  if (status === "approved") return "Активен";
-  if (status === "pending") return "На подтверждении";
-  return "В архиве";
-}
-
-function parseMoneyInput(value: string) {
-  const normalized = value.trim().replace(",", ".");
-  if (!normalized) return 0;
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error("Введите стоимость от 0");
-  }
-  return parsed;
-}
-
-function startDevelopmentTimer() {
-  return import.meta.env.DEV ? performance.now() : null;
-}
-
-function logDevelopmentTiming(label: string, startedAt: number | null) {
-  if (import.meta.env.DEV && startedAt !== null) {
-    console.debug(
-      `[BarStock performance] ${label}: ${(performance.now() - startedAt).toFixed(1)}ms`,
-    );
-  }
-}
-
-function productDraftFromProduct(product: Product): ProductDraft {
-  return {
-    name: product.name,
-    category_id: product.category_id ?? "",
-    unit: productUnits.includes(product.unit as ProductUnit)
-      ? (product.unit as ProductUnit)
-      : "бут",
-    status: productStatuses.includes(product.status as ProductStatus)
-      ? (product.status as ProductStatus)
-      : "pending",
-    unit_price: String(product.unit_price ?? 0),
-    area: product.area === "kitchen" ? "kitchen" : "bar",
-  };
-}
-
-function productDraftsEqual(left: ProductDraft, right: ProductDraft) {
-  return (
-    left.name === right.name &&
-    left.category_id === right.category_id &&
-    left.unit === right.unit &&
-    left.status === right.status &&
-    left.unit_price === right.unit_price &&
-    left.area === right.area
-  );
 }
 
 function staffDraftFromStaff(staff: Bartender): StaffDraft {
@@ -253,10 +171,6 @@ function AdminPage() {
   const createCategory = useServerFn(createCategoryFn);
   const updateCategory = useServerFn(updateCategoryFn);
   const deleteCategory = useServerFn(deleteCategoryFn);
-  const listProducts = useServerFn(listProductsFn);
-  const createProduct = useServerFn(createProductFn);
-  const updateProductsBatch = useServerFn(updateProductsBatchFn);
-  const restoreProduct = useServerFn(restoreProductFn);
 
   const [networkFilter, setNetworkFilter] = useState("all");
   const [creationNetworkId, setCreationNetworkId] = useState(session?.user.network_id ?? "");
@@ -275,21 +189,6 @@ function AdminPage() {
   const [categoryDrafts, setCategoryDrafts] = useState<Record<string, CategoryDraft>>({});
   const [categorySaveMessage, setCategorySaveMessage] = useState<string | null>(null);
   const [categoryAreaFilter, setCategoryAreaFilter] = useState<"all" | ProductArea>("all");
-  const [productSearch, setProductSearch] = useState("");
-  const [productCategoryFilter, setProductCategoryFilter] = useState("all");
-  const [productAreaFilter, setProductAreaFilter] = useState<"all" | ProductArea>("all");
-  const [productStatusFilter, setProductStatusFilter] = useState<ProductStatusFilter>("active");
-  const [productSaveMessage, setProductSaveMessage] = useState<string | null>(null);
-  const [productDrafts, setProductDrafts] = useState<Record<string, ProductDraft>>({});
-  const [newProduct, setNewProduct] = useState<ProductDraft>({
-    name: "",
-    category_id: "",
-    unit: "бут",
-    status: "approved",
-    unit_price: "0",
-    area: "bar",
-  });
-
   const networksQuery = useQuery({
     queryKey: ["restaurant-networks"],
     queryFn: () => listNetworks({ data: { session_token: sessionToken! } }),
@@ -315,13 +214,6 @@ function AdminPage() {
       listCategories({ data: { session_token: sessionToken!, network_id: selectedNetworkId } }),
     enabled: !!sessionToken,
   });
-  const productsQuery = useQuery({
-    queryKey: ["products", selectedNetworkId],
-    queryFn: () =>
-      listProducts({ data: { session_token: sessionToken!, network_id: selectedNetworkId } }),
-    enabled: !!sessionToken,
-  });
-
   const restaurants = useMemo(
     () => (restaurantsQuery.data ?? []) as Restaurant[],
     [restaurantsQuery.data],
@@ -334,7 +226,6 @@ function AdminPage() {
     () => (categoriesQuery.data ?? []) as Category[],
     [categoriesQuery.data],
   );
-  const products = useMemo(() => (productsQuery.data ?? []) as Product[], [productsQuery.data]);
   const networks = useMemo(
     () => (networksQuery.data ?? []) as RestaurantNetwork[],
     [networksQuery.data],
@@ -342,10 +233,6 @@ function AdminPage() {
   const restaurantById = useMemo(
     () => new Map(restaurants.map((restaurant) => [restaurant.id, restaurant.name])),
     [restaurants],
-  );
-  const categoryById = useMemo(
-    () => new Map(categories.map((category) => [category.id, category.name])),
-    [categories],
   );
   const filteredCategories = useMemo(
     () =>
@@ -355,15 +242,6 @@ function AdminPage() {
       ),
     [categories, categoryAreaFilter],
   );
-  const newProductCategories = useMemo(
-    () =>
-      categories.filter(
-        (category) =>
-          (category.area ?? "bar") === newProduct.area &&
-          (!isSuperAdmin || category.network_id === creationNetworkId),
-      ),
-    [categories, creationNetworkId, isSuperAdmin, newProduct.area],
-  );
   const creationRestaurants = useMemo(
     () =>
       isSuperAdmin
@@ -371,23 +249,6 @@ function AdminPage() {
         : restaurants,
     [creationNetworkId, isSuperAdmin, restaurants],
   );
-  const filteredProducts = useMemo(() => {
-    const search = productSearch.trim().toLowerCase();
-    return products.filter((product) => {
-      const isArchived = product.status === "archived";
-      if (productStatusFilter === "active" && isArchived) return false;
-      if (productStatusFilter === "archived" && !isArchived) return false;
-      if (productAreaFilter !== "all" && (product.area ?? "bar") !== productAreaFilter) {
-        return false;
-      }
-      if (productCategoryFilter !== "all" && product.category_id !== productCategoryFilter) {
-        return false;
-      }
-      if (search && !product.name.toLowerCase().includes(search)) return false;
-      return true;
-    });
-  }, [productAreaFilter, productCategoryFilter, productSearch, productStatusFilter, products]);
-
   const refreshAdminData = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["restaurants"] }),
@@ -560,100 +421,6 @@ function AdminPage() {
       await refreshAdminData();
     },
   });
-  const createProductMutation = useMutation({
-    mutationFn: async () => {
-      const startedAt = startDevelopmentTimer();
-      const product = await createProduct({
-        data: {
-          ...newProduct,
-          network_id: isSuperAdmin ? creationNetworkId : undefined,
-          unit_price: parseMoneyInput(newProduct.unit_price),
-          session_token: sessionToken!,
-        },
-      });
-      logDevelopmentTiming("create product request", startedAt);
-      return product as Product;
-    },
-    onSuccess: (product) => {
-      const cacheStartedAt = startDevelopmentTimer();
-      queryClient.setQueryData<Product[]>(["products", selectedNetworkId], (current) =>
-        addProductToCache(current, product, selectedNetworkId),
-      );
-      logDevelopmentTiming("create product cache update", cacheStartedAt);
-      setNewProduct({
-        name: "",
-        category_id: "",
-        unit: "бут",
-        status: "approved",
-        unit_price: "0",
-        area: "bar",
-      });
-      setProductSaveMessage("Товар создан");
-      void queryClient.invalidateQueries({
-        queryKey: ["products", selectedNetworkId],
-        exact: true,
-      });
-    },
-  });
-  const saveProductsMutation = useMutation({
-    mutationFn: async (changes: ProductChange[]) => {
-      const startedAt = startDevelopmentTimer();
-      const updatedProducts = await updateProductsBatch({
-        data: {
-          session_token: sessionToken!,
-          products: changes.map(({ id, draft }) => ({
-            id,
-            ...draft,
-            name: draft.name.trim(),
-            unit_price: parseMoneyInput(draft.unit_price),
-          })),
-        },
-      });
-      logDevelopmentTiming(`batch product request (${changes.length})`, startedAt);
-      return updatedProducts as Product[];
-    },
-    onSuccess: (updatedProducts, changes) => {
-      const cacheStartedAt = startDevelopmentTimer();
-      queryClient.setQueryData<Product[]>(["products", selectedNetworkId], (current) =>
-        replaceProductsInCache(current, updatedProducts, selectedNetworkId),
-      );
-      logDevelopmentTiming(
-        `batch product cache update (${updatedProducts.length})`,
-        cacheStartedAt,
-      );
-      clearSavedProductDrafts(
-        changes,
-        updatedProducts.map((product) => product.id),
-      );
-      setProductSaveMessage("Изменения сохранены");
-      void queryClient.invalidateQueries({
-        queryKey: ["products", selectedNetworkId],
-        exact: true,
-      });
-    },
-    onError: () => {
-      setProductSaveMessage(null);
-    },
-  });
-  const restoreProductMutation = useMutation({
-    mutationFn: (id: string) => restoreProduct({ data: { id, session_token: sessionToken! } }),
-    onSuccess: (product, id) => {
-      queryClient.setQueryData<Product[]>(["products", selectedNetworkId], (current) =>
-        addProductToCache(current, product as Product, selectedNetworkId),
-      );
-      setProductDrafts((prev) => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setProductSaveMessage("Товар восстановлен");
-      void queryClient.invalidateQueries({
-        queryKey: ["products", selectedNetworkId],
-        exact: true,
-      });
-    },
-  });
-
   function staffDraft(staff: Bartender): StaffDraft {
     return staffDrafts[staff.id] ?? staffDraftFromStaff(staff);
   }
@@ -735,52 +502,6 @@ function AdminPage() {
     if (changes.length > 0) saveCategoriesMutation.mutate(changes);
   }
 
-  function productDraft(product: Product): ProductDraft {
-    return productDrafts[product.id] ?? productDraftFromProduct(product);
-  }
-
-  function setProductDraft(id: string, patch: Partial<ProductDraft>) {
-    const product = products.find((item) => item.id === id);
-    if (!product) return;
-    setProductSaveMessage(null);
-    setProductDrafts((prev) => {
-      const original = productDraftFromProduct(product);
-      const nextDraft = { ...(prev[id] ?? original), ...patch };
-      const next = { ...prev };
-      if (productDraftsEqual(nextDraft, original)) {
-        delete next[id];
-      } else {
-        next[id] = nextDraft;
-      }
-      return next;
-    });
-  }
-
-  function clearSavedProductDrafts(changes: ProductChange[], savedIds: string[]) {
-    const savedIdSet = new Set(savedIds);
-    setProductDrafts((prev) => {
-      const next = { ...prev };
-      for (const change of changes) {
-        if (
-          savedIdSet.has(change.id) &&
-          next[change.id] &&
-          productDraftsEqual(next[change.id], change.draft)
-        ) {
-          delete next[change.id];
-        }
-      }
-      return next;
-    });
-  }
-
-  function saveProductChanges() {
-    const changes = Object.entries(productDrafts).map(([id, draft]) => ({ id, draft }));
-    if (changes.length > 0) {
-      setProductSaveMessage(null);
-      saveProductsMutation.mutate(changes);
-    }
-  }
-
   function submitRestaurant(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (restaurantName.trim() && (!isSuperAdmin || creationNetworkId)) {
@@ -808,18 +529,6 @@ function AdminPage() {
     event.preventDefault();
     if (categoryName.trim() && (!isSuperAdmin || creationNetworkId)) {
       createCategoryMutation.mutate();
-    }
-  }
-
-  function submitProduct(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (
-      newProduct.name.trim() &&
-      newProduct.category_id &&
-      newProduct.unit &&
-      (!isSuperAdmin || creationNetworkId)
-    ) {
-      createProductMutation.mutate();
     }
   }
 
@@ -1286,236 +995,13 @@ function AdminPage() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-border bg-card p-4">
-        <SectionTitle icon={<Package className="size-5 text-primary" />} title="Товары" />
-        <form onSubmit={submitProduct} className="mb-4 grid gap-2 lg:grid-cols-7">
-          <Input
-            value={newProduct.name}
-            onChange={(event) => setNewProduct((prev) => ({ ...prev, name: event.target.value }))}
-            placeholder="Название товара"
-          />
-          <CategorySelect
-            value={newProduct.category_id}
-            categories={newProductCategories}
-            onChange={(value) => setNewProduct((prev) => ({ ...prev, category_id: value }))}
-          />
-          <UnitSelect
-            value={newProduct.unit}
-            onChange={(value) => setNewProduct((prev) => ({ ...prev, unit: value }))}
-          />
-          <StatusSelect
-            value={newProduct.status}
-            onChange={(value) => setNewProduct((prev) => ({ ...prev, status: value }))}
-          />
-          <AreaSelect
-            value={newProduct.area}
-            onChange={(value) =>
-              setNewProduct((prev) => ({ ...prev, area: value, category_id: "" }))
-            }
-          />
-          <Input
-            inputMode="decimal"
-            value={newProduct.unit_price}
-            onChange={(event) =>
-              setNewProduct((prev) => ({ ...prev, unit_price: event.target.value }))
-            }
-            placeholder="Стоимость за единицу, BYN"
-          />
-          <Button
-            type="submit"
-            disabled={createProductMutation.isPending || newProductCategories.length === 0}
-          >
-            <Package className="size-4" />
-            {createProductMutation.isPending ? "Создание..." : "Создать товар"}
-          </Button>
-        </form>
-        <ErrorText error={createProductMutation.error} fallback="Не удалось создать товар" />
-        <ErrorText error={saveProductsMutation.error} fallback="Не удалось сохранить товары" />
-        <ErrorText error={restoreProductMutation.error} fallback="Не удалось восстановить товар" />
-        {productSaveMessage && (
-          <p className="mb-3 text-sm text-muted-foreground">{productSaveMessage}</p>
-        )}
-
-        <div className="mb-3 flex flex-col gap-2">
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={productStatusFilter}
-            onValueChange={(value) => {
-              if (value) setProductStatusFilter(value as ProductStatusFilter);
-            }}
-            className="w-full justify-start overflow-x-auto sm:w-auto"
-            aria-label="Фильтр статуса товаров"
-          >
-            <ToggleGroupItem value="active" className="px-3">
-              Активные
-            </ToggleGroupItem>
-            <ToggleGroupItem value="archived" className="px-3">
-              Архив
-            </ToggleGroupItem>
-            <ToggleGroupItem value="all" className="px-3">
-              Все
-            </ToggleGroupItem>
-          </ToggleGroup>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Input
-              value={productSearch}
-              onChange={(event) => setProductSearch(event.target.value)}
-              placeholder="Поиск по названию"
-              className="sm:max-w-sm"
-            />
-            <select
-              value={productAreaFilter}
-              onChange={(event) => {
-                setProductAreaFilter(event.target.value as "all" | ProductArea);
-                setProductCategoryFilter("all");
-              }}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="all">Все зоны</option>
-              <option value="bar">Бар</option>
-              <option value="kitchen">Кухня</option>
-            </select>
-            <select
-              value={productCategoryFilter}
-              onChange={(event) => setProductCategoryFilter(event.target.value)}
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="all">Все категории</option>
-              {categories
-                .filter(
-                  (category) =>
-                    productAreaFilter === "all" || (category.area ?? "bar") === productAreaFilter,
-                )
-                .map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.name}
-                  </option>
-                ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-muted-foreground">
-              {Object.keys(productDrafts).length > 0
-                ? `Есть несохранённые изменения: ${Object.keys(productDrafts).length}`
-                : "Все изменения сохранены"}
-            </p>
-            <Button
-              type="button"
-              disabled={Object.keys(productDrafts).length === 0 || saveProductsMutation.isPending}
-              onClick={saveProductChanges}
-            >
-              <Save className="size-4" />
-              {saveProductsMutation.isPending ? "Сохранение..." : "Сохранить изменения"}
-            </Button>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead className="text-xs uppercase text-muted-foreground">
-              <tr className="border-b border-border">
-                <th className="px-3 py-2 text-left font-medium">Название</th>
-                <th className="px-3 py-2 text-left font-medium">Категория</th>
-                <th className="px-3 py-2 text-left font-medium">Ед.</th>
-                <th className="px-3 py-2 text-left font-medium">{"\u0417\u043e\u043d\u0430"}</th>
-                <th className="px-3 py-2 text-left font-medium">Цена, BYN</th>
-                <th className="px-3 py-2 text-left font-medium">Статус</th>
-                <th className="px-3 py-2 text-left font-medium">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredProducts.map((product) => {
-                const draft = productDraft(product);
-                return (
-                  <tr
-                    key={product.id}
-                    className={`border-b border-border last:border-b-0 ${
-                      productDrafts[product.id] ? "bg-primary/5" : ""
-                    }`}
-                  >
-                    <td className="px-3 py-2">
-                      <Input
-                        value={draft.name}
-                        onChange={(event) =>
-                          setProductDraft(product.id, { name: event.target.value })
-                        }
-                        className="min-w-48"
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <CategorySelect
-                        value={draft.category_id}
-                        categories={categories.filter(
-                          (category) => (category.area ?? "bar") === draft.area,
-                        )}
-                        onChange={(value) => setProductDraft(product.id, { category_id: value })}
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <UnitSelect
-                        value={draft.unit}
-                        onChange={(value) => setProductDraft(product.id, { unit: value })}
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <AreaSelect
-                        value={draft.area}
-                        onChange={(value) =>
-                          setProductDraft(product.id, { area: value, category_id: "" })
-                        }
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <Input
-                        inputMode="decimal"
-                        value={draft.unit_price}
-                        onChange={(event) =>
-                          setProductDraft(product.id, { unit_price: event.target.value })
-                        }
-                        className="min-w-28 text-right"
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      {product.status === "archived" ? (
-                        <span className="whitespace-nowrap text-muted-foreground">В архиве</span>
-                      ) : (
-                        <StatusSelect
-                          value={draft.status}
-                          onChange={(value) => setProductDraft(product.id, { status: value })}
-                        />
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex min-w-32 gap-2">
-                        {product.status === "archived" && (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            disabled={restoreProductMutation.isPending}
-                            onClick={() => restoreProductMutation.mutate(product.id)}
-                          >
-                            <RotateCcw className="size-4" />
-                            Восстановить
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {filteredProducts.length === 0 && (
-                <tr>
-                  <td className="px-3 py-6 text-center text-muted-foreground" colSpan={7}>
-                    Товары не найдены.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <ProductsSection
+        sessionToken={sessionToken!}
+        isSuperAdmin={isSuperAdmin}
+        selectedNetworkId={selectedNetworkId}
+        creationNetworkId={creationNetworkId}
+        categories={categories}
+      />
     </div>
   );
 }
@@ -1672,31 +1158,6 @@ function StaffRoleSelect({
   );
 }
 
-function CategorySelect({
-  value,
-  categories,
-  onChange,
-}: {
-  value: string;
-  categories: Category[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-    >
-      <option value="">Категория</option>
-      {categories.map((category) => (
-        <option key={category.id} value={category.id}>
-          {category.name}
-        </option>
-      ))}
-    </select>
-  );
-}
-
 function AreaSelect({
   value,
   onChange,
@@ -1736,50 +1197,6 @@ function AreaFilter({
       <option value="all">Все зоны</option>
       <option value="bar">Бар</option>
       <option value="kitchen">Кухня</option>
-    </select>
-  );
-}
-
-function UnitSelect({
-  value,
-  onChange,
-}: {
-  value: ProductUnit;
-  onChange: (value: ProductUnit) => void;
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(event) => onChange(event.target.value as ProductUnit)}
-      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-    >
-      {productUnits.map((unit) => (
-        <option key={unit} value={unit}>
-          {unit}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function StatusSelect({
-  value,
-  onChange,
-}: {
-  value: ProductStatus;
-  onChange: (value: ProductStatus) => void;
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(event) => onChange(event.target.value as ProductStatus)}
-      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-    >
-      {productStatuses.map((status) => (
-        <option key={status} value={status}>
-          {productStatusLabel(status)}
-        </option>
-      ))}
     </select>
   );
 }

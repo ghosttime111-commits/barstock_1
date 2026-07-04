@@ -7,6 +7,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ProductsSection } from "@/components/admin/ProductsSection";
 import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
+import { CATEGORY_DUPLICATE_MESSAGE } from "@/lib/categoryErrors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -134,14 +135,22 @@ function batchSaveResult<T extends { id: string }>(
   changes: T[],
   results: PromiseSettledResult<unknown>[],
   entityLabel: string,
+  safeErrorMessages: readonly string[] = [],
 ) {
   const savedIds = changes
     .filter((_, index) => results[index].status === "fulfilled")
     .map(({ id }) => id);
   const failedCount = results.filter((result) => result.status === "rejected").length;
   if (failedCount > 0) {
+    const safeFailureMessage = results.find(
+      (result): result is PromiseRejectedResult =>
+        result.status === "rejected" &&
+        result.reason instanceof Error &&
+        safeErrorMessages.includes(result.reason.message),
+    )?.reason.message;
     const error = new Error(
-      `Не удалось сохранить ${failedCount} ${entityLabel}(а). Остальные изменения сохранены.`,
+      safeFailureMessage ??
+        `Не удалось сохранить ${failedCount} ${entityLabel}(а). Остальные изменения сохранены.`,
     ) as BatchSaveError;
     error.savedIds = savedIds;
     throw error;
@@ -381,9 +390,37 @@ function AdminPage() {
           session_token: sessionToken!,
         },
       }),
-    onSuccess: async () => {
+    onSuccess: async (category) => {
       setCategoryName("");
-      await refreshAdminData();
+      const createdCategory = category as Category;
+      const updateCategoryCache = (networkId?: string) => {
+        queryClient.setQueryData<Category[]>(["categories", networkId], (current) => {
+          if (!current) return current;
+          if (networkId && networkId !== createdCategory.network_id) return current;
+          return [
+            ...current.filter((item) => item.id !== createdCategory.id),
+            createdCategory,
+          ].sort((left, right) => left.name.localeCompare(right.name, "ru"));
+        });
+      };
+
+      updateCategoryCache(selectedNetworkId);
+      if (selectedNetworkId !== createdCategory.network_id) {
+        updateCategoryCache(createdCategory.network_id);
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["categories", selectedNetworkId],
+          exact: true,
+        }),
+        selectedNetworkId === createdCategory.network_id
+          ? Promise.resolve()
+          : queryClient.invalidateQueries({
+              queryKey: ["categories", createdCategory.network_id],
+              exact: true,
+            }),
+      ]);
     },
   });
   const saveCategoriesMutation = useMutation({
@@ -400,7 +437,7 @@ function AdminPage() {
           }),
         ),
       );
-      return batchSaveResult(changes, results, "категори");
+      return batchSaveResult(changes, results, "категори", [CATEGORY_DUPLICATE_MESSAGE]);
     },
     onSuccess: async ({ savedIds }, changes) => {
       clearSavedCategoryDrafts(changes, savedIds);

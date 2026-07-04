@@ -9,7 +9,7 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "start": "vite preview",
-    "test": "node --test --experimental-strip-types src/lib/authorization.test.ts src/lib/productCache.test.ts src/lib/productCategories.test.ts src/lib/quantityExpression.test.ts src/lib/session.test.ts",
+    "test": "node --test --experimental-strip-types src/lib/authorization.test.ts src/lib/categoriesMigration.test.ts src/lib/categoryErrors.test.ts src/lib/productCache.test.ts src/lib/productCategories.test.ts src/lib/quantityExpression.test.ts src/lib/session.test.ts",
     "test:authorization": "node --test --experimental-strip-types src/lib/authorization.test.ts",
     "test:session": "node --test --experimental-strip-types src/lib/session.test.ts",
     "lint": "eslint .",

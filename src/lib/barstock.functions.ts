@@ -19,6 +19,7 @@ import {
   type AuthorizationContext,
   type PermissionKey,
 } from "./authorization";
+import { toSafeCategoryMutationError } from "./categoryErrors";
 
 const idSchema = z.object({ id: z.string().uuid() });
 const sessionSchema = z.object({ session_token: z.string().min(32).max(2048) });
@@ -1325,7 +1326,10 @@ export const createCategoryFn = createServerFn({ method: "POST" })
       .insert({ name: data.name, area: data.area, network_id: networkId })
       .select("id,name,area,network_id")
       .single();
-    if (error) throw new Error(error.message);
+    if (error) {
+      console.error("createCategoryFn database error", error);
+      throw toSafeCategoryMutationError(error, "create");
+    }
     return category;
   });
 
@@ -1350,7 +1354,10 @@ export const updateCategoryFn = createServerFn({ method: "POST" })
       .select("id,network_id")
       .eq("id", data.id)
       .maybeSingle();
-    if (existingError) throw new Error(existingError.message);
+    if (existingError) {
+      console.error("updateCategoryFn category lookup error", existingError);
+      throw toSafeCategoryMutationError(existingError, "update");
+    }
     if (!existing) throw new Error("Категория не найдена");
     assertSameNetwork(ctx, existing.network_id);
     const { count, error: productsError } = await sb
@@ -1358,7 +1365,10 @@ export const updateCategoryFn = createServerFn({ method: "POST" })
       .select("id", { count: "exact", head: true })
       .eq("category_id", data.id)
       .neq("area", data.area);
-    if (productsError) throw new Error(productsError.message);
+    if (productsError) {
+      console.error("updateCategoryFn product validation error", productsError);
+      throw toSafeCategoryMutationError(productsError, "update");
+    }
     if ((count ?? 0) > 0) {
       throw new Error("Нельзя изменить зону категории: в ней есть товары другой зоны");
     }
@@ -1369,7 +1379,10 @@ export const updateCategoryFn = createServerFn({ method: "POST" })
       .eq("id", data.id)
       .select("id,name,area,network_id")
       .single();
-    if (error) throw new Error(error.message);
+    if (error) {
+      console.error("updateCategoryFn database error", error);
+      throw toSafeCategoryMutationError(error, "update");
+    }
     return category;
   });
 

@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import {
   createAnnouncementFn,
   deactivateAnnouncementFn,
@@ -242,6 +243,17 @@ function AnnouncementForm({
   const [audience, setAudience] = useState<AudienceChoice>("all_staff");
   const [restaurantId, setRestaurantId] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  useUnsavedChanges(
+    "announcement-create",
+    Boolean(
+      title.trim() ||
+      body.trim() ||
+      priority !== "normal" ||
+      audience !== "all_staff" ||
+      restaurantId ||
+      expiresAt,
+    ),
+  );
 
   const mutation = useMutation({
     mutationFn: () =>

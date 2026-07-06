@@ -22,6 +22,7 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import { formatQuantity } from "@/lib/formatQuantity";
+import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import { parseQuantityExpression } from "@/lib/quantityExpression";
 import { useSession } from "@/lib/session";
 
@@ -417,6 +418,10 @@ function ItemRow({
   const [saved, setSaved] = useState<boolean>(initial !== undefined);
   const [displayQuantity, setDisplayQuantity] = useState(initial ?? 0);
   const currentQuantity = displayQuantity;
+  useUnsavedChanges(
+    `inventory-item-${product.id}`,
+    !disabled && Boolean(value.trim()) && (!saved || saving),
+  );
 
   useEffect(() => {
     setDisplayQuantity(initial ?? 0);

@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import {
   createProductFn,
   listProductsFn,
@@ -147,6 +148,7 @@ export const ProductsSection = memo(function ProductsSection({
   const [productSaveMessage, setProductSaveMessage] = useState<string | null>(null);
   const [productDrafts, setProductDrafts] = useState<Record<string, ProductDraft>>({});
   const [page, setPage] = useState(1);
+  useUnsavedChanges("admin-product-edits", Object.keys(productDrafts).length > 0);
 
   const productsQuery = useQuery({
     queryKey: ["products", selectedNetworkId],
@@ -473,6 +475,17 @@ const ProductCreateForm = memo(function ProductCreateForm({
     unit_price: "0",
     area: "bar",
   });
+  useUnsavedChanges(
+    "admin-product-create",
+    Boolean(
+      newProduct.name ||
+      newProduct.category_id ||
+      newProduct.unit_price !== "0" ||
+      newProduct.unit !== "бут" ||
+      newProduct.status !== "approved" ||
+      newProduct.area !== "bar",
+    ),
+  );
 
   const creationCategories = useMemo(
     () =>

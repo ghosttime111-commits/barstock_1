@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import {
   cancelStockTransferFn,
   createStockTransferFn,
@@ -243,6 +244,10 @@ function CreateTransferForm({
   const [comment, setComment] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  useUnsavedChanges(
+    "transfer-create",
+    Boolean(productId || quantity.trim() || restaurantId || comment.trim()),
+  );
 
   const mutation = useMutation({
     mutationFn: (parsedQuantity: number) =>

@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 
+import { PwaProvider } from "@/components/pwa/PwaProvider";
 import appCss from "../styles.css?url";
 
 function NotFoundComponent() {
@@ -76,11 +77,21 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "theme-color", content: "#17130f" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
+      { name: "apple-mobile-web-app-title", content: "BarStock" },
       { title: "BarStock" },
-      { name: "description", content: "BarStock inventory management" },
+      {
+        name: "description",
+        content: "Переучёты, списания и перемещения ресторанной сети",
+      },
       { name: "author", content: "BarStock" },
       { property: "og:title", content: "BarStock" },
-      { property: "og:description", content: "BarStock inventory management" },
+      {
+        property: "og:description",
+        content: "Переучёты, списания и перемещения ресторанной сети",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -88,6 +99,21 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       {
         rel: "stylesheet",
         href: appCss,
+      },
+      {
+        rel: "manifest",
+        href: "/manifest.webmanifest",
+      },
+      {
+        rel: "icon",
+        type: "image/png",
+        sizes: "32x32",
+        href: "/favicon-32x32.png",
+      },
+      {
+        rel: "apple-touch-icon",
+        sizes: "180x180",
+        href: "/apple-touch-icon.png",
       },
     ],
   }),
@@ -99,7 +125,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="ru">
       <head>
         <HeadContent />
       </head>
@@ -116,8 +142,10 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      <PwaProvider>
+        {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+        <Outlet />
+      </PwaProvider>
     </QueryClientProvider>
   );
 }

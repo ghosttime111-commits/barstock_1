@@ -19,6 +19,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { InstallBarStockButton } from "@/components/pwa/PwaProvider";
 import {
   Sheet,
   SheetContent,
@@ -389,6 +390,7 @@ function SidebarContent({
       </nav>
 
       <div className="mt-auto border-t border-border/70 p-3">
+        <InstallBarStockButton />
         <div className="min-w-0 px-2 pb-3 pt-1">
           <p className="truncate text-sm font-medium">{userName}</p>
           <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{role}</p>

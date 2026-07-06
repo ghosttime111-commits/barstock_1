@@ -6,6 +6,7 @@ import { useMemo, useState, type FormEvent } from "react";
 
 import { AppShell } from "@/components/AppShell";
 import { ProductsSection } from "@/components/admin/ProductsSection";
+import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import { PERMISSIONS, hasSerializedPermission } from "@/lib/authorization";
 import { CATEGORY_DUPLICATE_MESSAGE } from "@/lib/categoryErrors";
 import { Button } from "@/components/ui/button";
@@ -198,6 +199,19 @@ function AdminPage() {
   const [categoryDrafts, setCategoryDrafts] = useState<Record<string, CategoryDraft>>({});
   const [categorySaveMessage, setCategorySaveMessage] = useState<string | null>(null);
   const [categoryAreaFilter, setCategoryAreaFilter] = useState<"all" | ProductArea>("all");
+  useUnsavedChanges(
+    "admin-page",
+    Object.keys(staffDrafts).length > 0 ||
+      Object.keys(categoryDrafts).length > 0 ||
+      Boolean(
+        networkName ||
+        restaurantName ||
+        bartenderName ||
+        bartenderLogin ||
+        bartenderPassword ||
+        categoryName,
+      ),
+  );
   const effectiveCreationNetworkId = isSuperAdmin
     ? creationNetworkId
     : (session?.user.network_id ?? "");

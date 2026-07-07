@@ -20,6 +20,21 @@ export function addProductToCache<T extends NetworkProduct>(
   return products.map((item) => (item.id === product.id ? product : item)).sort(byName);
 }
 
+export function addProductsToCache<T extends NetworkProduct>(
+  current: T[] | undefined,
+  importedProducts: T[],
+  selectedNetworkId?: string,
+) {
+  const products = current ?? [];
+  const next = new Map(products.map((product) => [product.id, product]));
+  for (const product of importedProducts) {
+    if (!selectedNetworkId || product.network_id === selectedNetworkId) {
+      next.set(product.id, product);
+    }
+  }
+  return Array.from(next.values()).sort(byName);
+}
+
 export function replaceProductsInCache<T extends NetworkProduct>(
   current: T[] | undefined,
   updatedProducts: T[],

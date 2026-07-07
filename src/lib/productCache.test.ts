@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { addProductToCache, replaceProductsInCache } from "./productCache.ts";
+import { addProductsToCache, addProductToCache, replaceProductsInCache } from "./productCache.ts";
 
 type Product = {
   id: string;
@@ -37,6 +37,24 @@ test("created product is not added to another network cache", () => {
 
 test("created product is added to the all-networks cache", () => {
   const result = addProductToCache<Product>([], networkAProduct);
+  assert.deepEqual(result, [networkAProduct]);
+});
+
+test("imported products update only the selected network cache", () => {
+  const current: Product[] = [
+    {
+      id: "product-b",
+      name: "Банан",
+      network_id: "network-b",
+      status: "approved",
+    },
+  ];
+  const result = addProductsToCache(current, [networkAProduct], "network-b");
+  assert.deepEqual(result, current);
+});
+
+test("imported products are merged into the all-networks cache", () => {
+  const result = addProductsToCache<Product>([], [networkAProduct]);
   assert.deepEqual(result, [networkAProduct]);
 });
 

@@ -19,6 +19,7 @@ import {
   type AuthorizationContext,
   type PermissionKey,
 } from "./authorization";
+import { normalizeCatalogKey } from "./catalogImport";
 import { toSafeCategoryMutationError } from "./categoryErrors";
 
 const idSchema = z.object({ id: z.string().uuid() });
@@ -79,6 +80,77 @@ const productsBatchSchema = sessionSchema
       ids.add(product.id);
     }
   });
+const catalogImportCategorySchema = z
+  .object({
+    name: z.string().trim().min(1).max(160),
+    area: inventoryAreaSchema,
+  })
+  .strict();
+const catalogImportProductSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    category_name: z.string().trim().min(1).max(160),
+    area: inventoryAreaSchema,
+    unit: productUnitSchema,
+    status: productStatusSchema.default("approved"),
+    unit_price: moneySchema.default(0),
+  })
+  .strict();
+const catalogImportBatchSchema = sessionSchema
+  .extend({
+    network_id: z.string().uuid().nullable().optional(),
+    categories: z.array(catalogImportCategorySchema).max(500),
+    products: z.array(catalogImportProductSchema).max(2000),
+  })
+  .strict()
+  .superRefine(({ categories, products }, ctx) => {
+    if (categories.length === 0 && products.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Нет данных для импорта",
+        path: ["products"],
+      });
+      return;
+    }
+
+    const categoryKeys = new Set<string>();
+    for (const category of categories) {
+      const key = `${category.area}:${normalizeCatalogKey(category.name)}`;
+      if (categoryKeys.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Дубликат категории в пакете импорта",
+          path: ["categories"],
+        });
+        return;
+      }
+      categoryKeys.add(key);
+    }
+
+    const productKeys = new Set<string>();
+    for (const product of products) {
+      const key = `${product.area}:${normalizeCatalogKey(product.name)}`;
+      if (productKeys.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Дубликат товара в пакете импорта",
+          path: ["products"],
+        });
+        return;
+      }
+      productKeys.add(key);
+    }
+  });
+
+function parseCatalogImportBatchInput(input: unknown) {
+  const result = catalogImportBatchSchema.safeParse(input);
+  if (result.success) return result.data;
+  const firstIssue = result.error.issues[0];
+  if (firstIssue?.code === z.ZodIssueCode.unrecognized_keys) {
+    throw new Error("Файл импорта содержит неподдерживаемые поля");
+  }
+  throw new Error(firstIssue?.message || "Некорректные данные импорта");
+}
 const inventoryEntryTypeSchema = z.enum(["add", "set"]);
 const writeOffFiltersSchema = sessionSchema.extend({
   month: z
@@ -1602,6 +1674,118 @@ export const updateProductsBatchFn = createServerFn({ method: "POST" })
       throw new Error("Не все товары были сохранены");
     }
     return updatedProducts ?? [];
+  });
+
+type CatalogImportCreatedCategory = {
+  id: string;
+  name: string;
+  area: InventoryArea;
+  network_id: string;
+};
+
+type CatalogImportCreatedProduct = {
+  id: string;
+  name: string;
+  category_id: string;
+  unit: string;
+  status: string;
+  unit_price: number | string;
+  area: InventoryArea;
+  network_id: string;
+};
+
+type CatalogImportRpcResult = {
+  created_categories?: CatalogImportCreatedCategory[];
+  created_products?: CatalogImportCreatedProduct[];
+  skipped_products?: Array<{ name: string; area: InventoryArea; reason: string }>;
+  counts?: {
+    created_categories: number;
+    created_products: number;
+    skipped_products: number;
+  };
+};
+
+export const importCatalogBatchFn = createServerFn({ method: "POST" })
+  .inputValidator(parseCatalogImportBatchInput)
+  .handler(async ({ data }) => {
+    const ctx = await requireSession(data.session_token);
+    requirePermission(ctx, PERMISSIONS.CATEGORIES_MANAGE);
+    requirePermission(ctx, PERMISSIONS.PRODUCTS_MANAGE);
+
+    const networkId = resolveNetworkId(ctx, data.network_id);
+    const { getBarstock } = await import("./barstock.server");
+    const sb = getBarstock();
+    const [
+      { data: network, error: networkError },
+      { data: categories, error: categoriesError },
+      { data: products, error: productsError },
+    ] = await Promise.all([
+      sb.from("restaurant_networks").select("id,is_active").eq("id", networkId).maybeSingle(),
+      sb.from("categories").select("id,name,area,network_id").eq("network_id", networkId),
+      sb.from("products").select("id,name,area,network_id").eq("network_id", networkId),
+    ]);
+    if (networkError) throw new Error(networkError.message);
+    if (!network || network.is_active === false) {
+      throw new Error("Выбранная сеть ресторанов недоступна");
+    }
+    if (categoriesError) throw new Error(categoriesError.message);
+    if (productsError) throw new Error(productsError.message);
+
+    const inputCategoryKeys = new Set(
+      data.categories.map((category) => `${category.area}:${normalizeCatalogKey(category.name)}`),
+    );
+    const existingCategoryKeys = new Set(
+      (categories ?? []).map(
+        (category) =>
+          `${category.area === "kitchen" ? "kitchen" : "bar"}:${normalizeCatalogKey(category.name)}`,
+      ),
+    );
+    const existingProductKeys = new Set(
+      (products ?? []).map(
+        (product) =>
+          `${product.area === "kitchen" ? "kitchen" : "bar"}:${normalizeCatalogKey(product.name)}`,
+      ),
+    );
+    const categoryNameAreas = new Map<string, Set<InventoryArea>>();
+    for (const category of [...(categories ?? []), ...data.categories]) {
+      const area = category.area === "kitchen" ? "kitchen" : "bar";
+      const key = normalizeCatalogKey(category.name);
+      const areas = categoryNameAreas.get(key) ?? new Set<InventoryArea>();
+      areas.add(area);
+      categoryNameAreas.set(key, areas);
+    }
+
+    for (const product of data.products) {
+      const productKey = `${product.area}:${normalizeCatalogKey(product.name)}`;
+      if (existingProductKeys.has(productKey)) continue;
+
+      const categoryKey = `${product.area}:${normalizeCatalogKey(product.category_name)}`;
+      if (!existingCategoryKeys.has(categoryKey) && !inputCategoryKeys.has(categoryKey)) {
+        const sameNameAreas = categoryNameAreas.get(normalizeCatalogKey(product.category_name));
+        if (sameNameAreas?.size && !sameNameAreas.has(product.area)) {
+          throw new Error(`Зона товара "${product.name}" должна совпадать с зоной категории`);
+        }
+        throw new Error(
+          `Категория "${product.category_name}" не найдена в выбранной сети и не указана в импорте`,
+        );
+      }
+    }
+
+    const { data: importResult, error } = await sb.rpc("import_catalog_batch", {
+      p_network_id: networkId,
+      p_categories: data.categories,
+      p_products: data.products,
+    });
+    if (error) {
+      console.error("importCatalogBatchFn database error", error);
+      throw new Error("Не удалось импортировать справочник. Проверьте данные и попробуйте снова");
+    }
+    return (importResult ?? {
+      created_categories: [],
+      created_products: [],
+      skipped_products: [],
+      counts: { created_categories: 0, created_products: 0, skipped_products: 0 },
+    }) as CatalogImportRpcResult;
   });
 
 export const archiveProductFn = createServerFn({ method: "POST" })

@@ -122,3 +122,33 @@ export function resolveSessionRecovery({
   if (refreshPending) return { status: "refreshing" };
   return { status: "refreshing" };
 }
+
+export type LoginSessionCheckResult =
+  | { status: "loading" }
+  | { status: "form" }
+  | { status: "checking" }
+  | { status: "clear" }
+  | { status: "authenticated"; session: BarstockSession };
+
+export function resolveLoginSessionCheck({
+  ready,
+  session,
+  checkedSession,
+  checkPending,
+  checkError,
+}: {
+  ready: boolean;
+  session: BarstockSession | null;
+  checkedSession?: BarstockSession;
+  checkPending: boolean;
+  checkError: unknown;
+}): LoginSessionCheckResult {
+  if (!ready) return { status: "loading" };
+  if (!session) return { status: "form" };
+  if (checkedSession && Array.isArray(checkedSession.permissions)) {
+    return { status: "authenticated", session: checkedSession };
+  }
+  if (checkError) return { status: "clear" };
+  if (checkPending) return { status: "checking" };
+  return { status: "checking" };
+}

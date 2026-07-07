@@ -31,7 +31,7 @@ export default defineConfig({
         short_name: "BarStock",
         description: "Переучёты, списания и перемещения ресторанной сети",
         lang: "ru",
-        start_url: "/",
+        start_url: "/login",
         scope: "/",
         display: "standalone",
         orientation: "any",

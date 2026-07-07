@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PermissionKey } from "./authorization.ts";
-import { getSession, resolveSessionRecovery, type BarstockSession } from "./session.ts";
+import {
+  getSession,
+  resolveLoginSessionCheck,
+  resolveSessionRecovery,
+  type BarstockSession,
+} from "./session.ts";
 
 const STORAGE_KEY = "barstock.session.v1";
 
@@ -111,4 +116,56 @@ test("RBAC refresh error cannot remain in the loading state", () => {
     refreshError: new Error("permissions unavailable"),
   });
   assert.equal(result.status, "login");
+});
+
+function loginCheck(overrides: Partial<Parameters<typeof resolveLoginSessionCheck>[0]> = {}) {
+  return resolveLoginSessionCheck({
+    ready: true,
+    session: null,
+    checkedSession: undefined,
+    checkPending: false,
+    checkError: null,
+    ...overrides,
+  });
+}
+
+test("login route shows the form when local session is missing", () => {
+  assert.deepEqual(loginCheck(), { status: "form" });
+});
+
+test("login route checks and accepts a valid stored session", () => {
+  const session = createSession({ permissions: ["inventories.view"] });
+  const refreshed = createSession({ permissions: ["inventories.view", "write_offs.view"] });
+  assert.deepEqual(loginCheck({ session, checkedSession: refreshed }), {
+    status: "authenticated",
+    session: refreshed,
+  });
+});
+
+test("login route clears expired or invalid stored sessions", () => {
+  assert.deepEqual(
+    loginCheck({
+      session: createSession({ permissions: ["inventories.view"] }),
+      checkError: new Error("expired token"),
+    }),
+    { status: "clear" },
+  );
+});
+
+test("login route refreshes a legacy session without redirecting to the public home page", () => {
+  const refreshed = createSession({ permissions: ["inventories.view"] });
+  assert.deepEqual(loginCheck({ session: createLegacySession(), checkedSession: refreshed }), {
+    status: "authenticated",
+    session: refreshed,
+  });
+});
+
+test("login route clears a legacy session when server refresh fails", () => {
+  assert.deepEqual(
+    loginCheck({
+      session: createLegacySession(),
+      checkError: new Error("invalid legacy session"),
+    }),
+    { status: "clear" },
+  );
 });

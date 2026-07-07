@@ -9,11 +9,13 @@ import {
   useMemo,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { CatalogImportDialog } from "@/components/admin/CatalogImportDialog";
 import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import {
   createProductFn,
@@ -314,7 +316,16 @@ export const ProductsSection = memo(function ProductsSection({
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
-      <SectionTitle />
+      <SectionTitle>
+        <CatalogImportDialog
+          sessionToken={sessionToken}
+          isSuperAdmin={isSuperAdmin}
+          selectedNetworkId={selectedNetworkId}
+          effectiveCreationNetworkId={effectiveCreationNetworkId}
+          categories={categories}
+          products={products}
+        />
+      </SectionTitle>
       <ProductCreateForm
         sessionToken={sessionToken}
         isSuperAdmin={isSuperAdmin}
@@ -749,11 +760,14 @@ const ProductRow = memo(function ProductRow({
   );
 });
 
-function SectionTitle() {
+function SectionTitle({ children }: { children?: ReactNode }) {
   return (
-    <div className="mb-4 flex items-center gap-2">
-      <Package className="size-5 text-primary" />
-      <h2 className="text-lg font-semibold">Товары</h2>
+    <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center gap-2">
+        <Package className="size-5 text-primary" />
+        <h2 className="text-lg font-semibold">Товары</h2>
+      </div>
+      {children}
     </div>
   );
 }

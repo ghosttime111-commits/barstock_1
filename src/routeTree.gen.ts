@@ -14,6 +14,7 @@ import { Route as TransfersRouteImport } from './routes/transfers'
 import { Route as StaffRouteImport } from './routes/staff'
 import { Route as SecurityRouteImport } from './routes/security'
 import { Route as ReportsRouteImport } from './routes/reports'
+import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as MessagesRouteImport } from './routes/messages'
 import { Route as ManagerRouteImport } from './routes/manager'
 import { Route as LoginRouteImport } from './routes/login'
@@ -49,6 +50,11 @@ const SecurityRoute = SecurityRouteImport.update({
 const ReportsRoute = ReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MessagesRoute = MessagesRouteImport.update({
@@ -114,6 +120,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
   '/messages': typeof MessagesRoute
+  '/privacy': typeof PrivacyRoute
   '/reports': typeof ReportsRouteWithChildren
   '/security': typeof SecurityRoute
   '/staff': typeof StaffRoute
@@ -131,6 +138,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
   '/messages': typeof MessagesRoute
+  '/privacy': typeof PrivacyRoute
   '/security': typeof SecurityRoute
   '/staff': typeof StaffRoute
   '/transfers': typeof TransfersRoute
@@ -149,6 +157,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/manager': typeof ManagerRoute
   '/messages': typeof MessagesRoute
+  '/privacy': typeof PrivacyRoute
   '/reports': typeof ReportsRouteWithChildren
   '/security': typeof SecurityRoute
   '/staff': typeof StaffRoute
@@ -169,6 +178,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/manager'
     | '/messages'
+    | '/privacy'
     | '/reports'
     | '/security'
     | '/staff'
@@ -186,6 +196,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/manager'
     | '/messages'
+    | '/privacy'
     | '/security'
     | '/staff'
     | '/transfers'
@@ -203,6 +214,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/manager'
     | '/messages'
+    | '/privacy'
     | '/reports'
     | '/security'
     | '/staff'
@@ -222,6 +234,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   ManagerRoute: typeof ManagerRoute
   MessagesRoute: typeof MessagesRoute
+  PrivacyRoute: typeof PrivacyRoute
   ReportsRoute: typeof ReportsRouteWithChildren
   SecurityRoute: typeof SecurityRoute
   StaffRoute: typeof StaffRoute
@@ -264,6 +277,13 @@ declare module '@tanstack/react-router' {
       path: '/reports'
       fullPath: '/reports'
       preLoaderRoute: typeof ReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/messages': {
@@ -382,6 +402,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   ManagerRoute: ManagerRoute,
   MessagesRoute: MessagesRoute,
+  PrivacyRoute: PrivacyRoute,
   ReportsRoute: ReportsRouteWithChildren,
   SecurityRoute: SecurityRoute,
   StaffRoute: StaffRoute,
